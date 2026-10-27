@@ -1,0 +1,33 @@
+name: Release checks
+
+on:
+  push:
+    branches: [main]
+    paths: ['.github/**', 'Makefile', 'AGENTS.md']
+  pull_request:
+    branches: [main]
+    paths: ['.github/**', 'Makefile', 'AGENTS.md']
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5
+      - name: Test custom release safeguards
+        run: python3 .github/tests/test_release_scripts.py -v
+      - name: Check shell syntax
+        run: |
+          for script in .github/custom_version.sh .github/set_custom_tag.sh .github/apk_version.sh .github/detect_track.sh .github/sync_upstream_tags.sh .github/upload_custom_release.sh .github/build_alpine_apk.sh .github/build_openwrt_apk.sh; do
+            bash -n "$script"
+          done
+      - name: Setup Go for actionlint
+        uses: actions/setup-go@v5
+        with:
+          go-version: 1.26.10
+          cache: false
+      - name: Validate workflows
+        run: go run github.com/rhysd/actionlint/cmd/actionlint@v1.7.12 -shellcheck= -pyflakes=

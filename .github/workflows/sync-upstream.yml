@@ -1,0 +1,42 @@
+name: Sync upstream
+
+on:
+  schedule:
+    - cron: '17 * * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: sync-upstream
+  cancel-in-progress: false
+
+jobs:
+  branches:
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        branch: [stable, testing]
+    steps:
+      - name: Force branch to match upstream
+        env:
+          GH_TOKEN: ${{ secrets.UPSTREAM_SYNC_TOKEN || github.token }}
+          DESTINATION: ${{ github.repository }}
+          BRANCH: ${{ matrix.branch }}
+        run: |
+          gh repo sync "$DESTINATION" --source SagerNet/sing-box --branch "$BRANCH" --force
+  tags:
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout main
+        uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5
+        with:
+          token: ${{ secrets.UPSTREAM_SYNC_TOKEN || github.token }}
+          fetch-depth: 0
+      - name: Import upstream tags without overwriting tags
+        shell: bash
+        run: bash .github/sync_upstream_tags.sh

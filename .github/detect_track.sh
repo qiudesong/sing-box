@@ -1,33 +1,18 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-branches=$(git branch -r --contains HEAD)
-if echo "$branches" | grep -q 'origin/stable'; then
-  track=stable
-elif echo "$branches" | grep -q 'origin/testing'; then
-  track=testing
-elif echo "$branches" | grep -q 'origin/oldstable'; then
-  track=oldstable
+version=${VERSION:-$(bash "$(dirname "$0")/custom_version.sh")}
+[[ "$version" == *-custom ]] || { echo "ERROR: refusing to publish an upstream version" >&2; exit 1; }
+if [[ "$version" == *-dev.* ]]; then
+  track=custom-testing
+  docker_tag=edge-custom
+elif [[ "$version" =~ -(alpha|beta|rc)\. ]]; then
+  track=custom-beta
+  docker_tag=latest-custom-beta
 else
-  echo "ERROR: HEAD is not on any known release branch (stable/testing/oldstable)" >&2
-  exit 1
+  track=custom
+  docker_tag=latest-custom
 fi
-
-if [[ "$track" == "stable" ]]; then
-  tag=$(git describe --tags --exact-match HEAD 2>/dev/null || true)
-  if [[ -n "$tag" && "$tag" == *"-"* ]]; then
-    track=beta
-  fi
-fi
-
-case "$track" in
-  stable)    name=sing-box;           docker_tag=latest ;;
-  beta)      name=sing-box-beta;      docker_tag=latest-beta ;;
-  testing)   name=sing-box-testing;   docker_tag=latest-testing ;;
-  oldstable) name=sing-box-oldstable; docker_tag=latest-oldstable ;;
-esac
-
-echo "track=${track} name=${name} docker_tag=${docker_tag}" >&2
-echo "TRACK=${track}" >> "$GITHUB_ENV"
-echo "NAME=${name}" >> "$GITHUB_ENV"
-echo "DOCKER_TAG=${docker_tag}" >> "$GITHUB_ENV"
+name=sing-box-custom
+printf 'track=%s name=%s docker_tag=%s\n' "$track" "$name" "$docker_tag" >&2
+printf 'TRACK=%s\nNAME=%s\nDOCKER_TAG=%s\n' "$track" "$name" "$docker_tag" >> "${GITHUB_ENV:?}"
