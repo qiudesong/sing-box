@@ -3,23 +3,17 @@ name: Test
 on:
   push:
     branches:
-      - oldstable
-      - stable
-      - testing
-      - unstable
+      - main
     paths-ignore:
       - '**.md'
       - '.github/**'
       - '!.github/workflows/test.yml'
   pull_request:
     branches:
-      - oldstable
-      - stable
-      - testing
-      - unstable
+      - main
 
 concurrency:
-  group: ${{ github.workflow }}-${{ github.ref }}-${{ github.event_name }}-${{ inputs.build }}
+  group: ${{ github.workflow }}-${{ github.ref }}-${{ github.event_name }}
   cancel-in-progress: true
 
 jobs:

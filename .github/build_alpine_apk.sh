@@ -26,12 +26,8 @@ fi
 
 PROJECT=$(cd "$(dirname "$0")/.."; pwd)
 
-# Convert version to APK format:
-#   1.13.0-beta.8  -> 1.13.0_beta8-r0
-#   1.13.0-rc.3    -> 1.13.0_rc3-r0
-#   1.13.0         -> 1.13.0-r0
-APK_VERSION=$(echo "$VERSION" | sed -E 's/-([a-z]+)\.([0-9]+)/_\1\2/')
-APK_VERSION="${APK_VERSION}-r0"
+# Normalize the custom version to APK suffixes.
+APK_VERSION=$(bash "$PROJECT/.github/apk_version.sh" "$VERSION")
 
 ROOT_DIR=$(mktemp -d)
 prepare_apk_root
@@ -82,12 +78,12 @@ done < "$PACKAGES_DIR/.conffiles" > "$PACKAGES_DIR/.conffiles_static"
 
 # Build APK
 apk --root "$APK_ROOT_DIR" mkpkg \
-  --info "name:sing-box" \
+  --info "name:sing-box-custom" \
   --info "version:${APK_VERSION}" \
   --info "description:The universal proxy platform." \
   --info "arch:${ARCHITECTURE}" \
   --info "license:GPL-3.0-or-later with name use or association addition" \
-  --info "origin:sing-box" \
+  --info "origin:sing-box-custom" \
   --info "url:https://sing-box.sagernet.org/" \
   --info "maintainer:nekohasekai <contact-git@sekai.icu>" \
   --files "$ROOT_DIR" \
