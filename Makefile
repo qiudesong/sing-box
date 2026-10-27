@@ -4,7 +4,8 @@ TAGS ?= $(shell cat release/DEFAULT_BUILD_TAGS_OTHERS)
 
 GOHOSTOS = $(shell go env GOHOSTOS)
 GOHOSTARCH = $(shell go env GOHOSTARCH)
-VERSION=$(shell CGO_ENABLED=0 GOOS=$(GOHOSTOS) GOARCH=$(GOHOSTARCH) go run github.com/sagernet/sing-box/cmd/internal/read_tag@latest)
+VERSION ?= $(shell bash .github/custom_version.sh)
+CUSTOM_REPOSITORY ?= qiudesong/sing-box
 
 LDFLAGS_SHARED = $(shell cat release/LDFLAGS)
 PARAMS = -v -trimpath -ldflags "-X 'github.com/sagernet/sing-box/constant.Version=$(VERSION)' $(LDFLAGS_SHARED) -s -w -buildid="
@@ -66,23 +67,13 @@ update_certificates:
 	go run ./cmd/internal/update_certificates
 
 release:
-	go run ./cmd/internal/build goreleaser release --clean --skip publish
-	mkdir dist/release
-	mv dist/*.tar.gz \
-		dist/*.zip \
-		dist/*.deb \
-		dist/*.rpm \
-		dist/*_amd64.pkg.tar.zst \
-		dist/*_arm64.pkg.tar.zst \
-		dist/release
-	ghr --replace --draft --prerelease -p 5 "v${VERSION}" dist/release
-	rm -r dist/release
+	bash .github/custom_version.sh --release "$(VERSION)"
+	gh workflow run build.yml --repo "$(CUSTOM_REPOSITORY)" --ref main -f version="$(VERSION)" -f build=Binary
 
-release_repo:
-	go run ./cmd/internal/build goreleaser release -f .goreleaser.fury.yaml --clean
+release_repo: release
 
 release_install:
-	go install -v github.com/tcnksm/ghr@latest
+	@command -v gh >/dev/null || { echo "Install GitHub CLI and run gh auth login"; exit 1; }
 
 update_android_version:
 	go run ./cmd/internal/update_android_version
@@ -100,7 +91,7 @@ upload_android:
 	VERSION_CODE=$$(grep VERSION_CODE ../sing-box-for-android/version.properties | cut -d= -f2); \
 	VERSION_NAME=$$(grep VERSION_NAME ../sing-box-for-android/version.properties | cut -d= -f2); \
 	printf '{\n  "version_code": %s,\n  "version_name": "%s"\n}\n' "$$VERSION_CODE" "$$VERSION_NAME" > dist/release_android/SFA-version-metadata.json
-	ghr --replace --draft --prerelease -p 5 "v${VERSION}" dist/release_android
+	bash .github/upload_custom_release.sh "${VERSION}" dist/release_android
 	rm -rf dist/release_android
 
 release_android: build_android upload_android
@@ -124,8 +115,8 @@ build_ios_deb:
 	$(MAKE) -C ../sing-box-for-apple build_ios_deb
 
 upload_ios_deb:
-	ghr --replace --draft --prerelease "v${VERSION}" ../sing-box-for-apple/build/jailbreak/"SFI-${VERSION}-iphoneos-arm64.deb"
-	ghr --replace --draft --prerelease "v${VERSION}" ../sing-box-for-apple/build/jailbreak/"SFI-${VERSION}-iphoneos-arm64e.deb"
+	bash .github/upload_custom_release.sh "${VERSION}" ../sing-box-for-apple/build/jailbreak/"SFI-${VERSION}-iphoneos-arm64.deb"
+	bash .github/upload_custom_release.sh "${VERSION}" ../sing-box-for-apple/build/jailbreak/"SFI-${VERSION}-iphoneos-arm64e.deb"
 
 release_ios: build_ios upload_ios_app_store
 
@@ -162,39 +153,39 @@ upload_macos_dmg:
 	cp ../sing-box-for-apple/build/SFM-Apple.dmg "dist/SFM/SFM-${VERSION}-Apple.dmg"
 	cp ../sing-box-for-apple/build/SFM-Intel.dmg "dist/SFM/SFM-${VERSION}-Intel.dmg"
 	cp ../sing-box-for-apple/build/SFM-Universal.dmg "dist/SFM/SFM-${VERSION}-Universal.dmg"
-	ghr --replace --draft --prerelease "v${VERSION}" "dist/SFM/SFM-${VERSION}-Apple.dmg"
-	ghr --replace --draft --prerelease "v${VERSION}" "dist/SFM/SFM-${VERSION}-Intel.dmg"
-	ghr --replace --draft --prerelease "v${VERSION}" "dist/SFM/SFM-${VERSION}-Universal.dmg"
+	bash .github/upload_custom_release.sh "${VERSION}" "dist/SFM/SFM-${VERSION}-Apple.dmg"
+	bash .github/upload_custom_release.sh "${VERSION}" "dist/SFM/SFM-${VERSION}-Intel.dmg"
+	bash .github/upload_custom_release.sh "${VERSION}" "dist/SFM/SFM-${VERSION}-Universal.dmg"
 
 upload_macos_pkg:
 	mkdir -p dist/SFM
 	cp ../sing-box-for-apple/build/SFM-Apple.pkg "dist/SFM/SFM-${VERSION}-Apple.pkg"
 	cp ../sing-box-for-apple/build/SFM-Intel.pkg "dist/SFM/SFM-${VERSION}-Intel.pkg"
 	cp ../sing-box-for-apple/build/SFM-Universal.pkg "dist/SFM/SFM-${VERSION}-Universal.pkg"
-	ghr --replace --draft --prerelease "v${VERSION}" "dist/SFM/SFM-${VERSION}-Apple.pkg"
-	ghr --replace --draft --prerelease "v${VERSION}" "dist/SFM/SFM-${VERSION}-Intel.pkg"
-	ghr --replace --draft --prerelease "v${VERSION}" "dist/SFM/SFM-${VERSION}-Universal.pkg"
+	bash .github/upload_custom_release.sh "${VERSION}" "dist/SFM/SFM-${VERSION}-Apple.pkg"
+	bash .github/upload_custom_release.sh "${VERSION}" "dist/SFM/SFM-${VERSION}-Intel.pkg"
+	bash .github/upload_custom_release.sh "${VERSION}" "dist/SFM/SFM-${VERSION}-Universal.pkg"
 
 replace_macos_pkg:
 	mkdir -p dist/SFM
 	cp ../sing-box-for-apple/build/SFM-Apple.pkg "dist/SFM/SFM-${VERSION}-Apple.pkg"
 	cp ../sing-box-for-apple/build/SFM-Intel.pkg "dist/SFM/SFM-${VERSION}-Intel.pkg"
 	cp ../sing-box-for-apple/build/SFM-Universal.pkg "dist/SFM/SFM-${VERSION}-Universal.pkg"
-	ghr --replace "v${VERSION}" "dist/SFM/SFM-${VERSION}-Apple.pkg"
-	ghr --replace "v${VERSION}" "dist/SFM/SFM-${VERSION}-Intel.pkg"
-	ghr --replace "v${VERSION}" "dist/SFM/SFM-${VERSION}-Universal.pkg"
+	bash .github/upload_custom_release.sh "${VERSION}" "dist/SFM/SFM-${VERSION}-Apple.pkg"
+	bash .github/upload_custom_release.sh "${VERSION}" "dist/SFM/SFM-${VERSION}-Intel.pkg"
+	bash .github/upload_custom_release.sh "${VERSION}" "dist/SFM/SFM-${VERSION}-Universal.pkg"
 
 upload_macos_dsyms:
 	mkdir -p dist/SFM
 	cd ../sing-box-for-apple/build/SFM.System-universal.xcarchive && zip -r SFM.dSYMs.zip dSYMs
 	cp ../sing-box-for-apple/build/SFM.System-universal.xcarchive/SFM.dSYMs.zip "dist/SFM/SFM-${VERSION}.dSYMs.zip"
-	ghr --replace --draft --prerelease "v${VERSION}" "dist/SFM/SFM-${VERSION}.dSYMs.zip"
+	bash .github/upload_custom_release.sh "${VERSION}" "dist/SFM/SFM-${VERSION}.dSYMs.zip"
 
 replace_macos_dsyms:
 	mkdir -p dist/SFM
 	cd ../sing-box-for-apple/build/SFM.System-universal.xcarchive && zip -r SFM.dSYMs.zip dSYMs
 	cp ../sing-box-for-apple/build/SFM.System-universal.xcarchive/SFM.dSYMs.zip "dist/SFM/SFM-${VERSION}.dSYMs.zip"
-	ghr --replace "v${VERSION}" "dist/SFM/SFM-${VERSION}.dSYMs.zip"
+	bash .github/upload_custom_release.sh "${VERSION}" "dist/SFM/SFM-${VERSION}.dSYMs.zip"
 
 release_macos_standalone: build_macos_pkg notarize_macos_pkg upload_macos_pkg upload_macos_dsyms
 
@@ -215,9 +206,8 @@ export_tvos_ipa:
 	cp build/SFT/sing-box.ipa dist/SFT.ipa
 
 upload_tvos_ipa:
-	cd dist && \
-	cp SFT.ipa "SFT-${VERSION}.ipa" && \
-	ghr --replace --draft --prerelease "v${VERSION}" "SFT-${VERSION}.ipa"
+	cp dist/SFT.ipa "dist/SFT-${VERSION}.ipa"
+	bash .github/upload_custom_release.sh "${VERSION}" "dist/SFT-${VERSION}.ipa"
 
 release_tvos: build_tvos upload_tvos_app_store
 
