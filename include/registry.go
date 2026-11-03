@@ -144,6 +144,7 @@ func ServiceRegistry() *service.Registry {
 	registry := service.NewRegistry()
 
 	api.RegisterService(registry)
+	registerBGPBypassService(registry)
 	resolved.RegisterService(registry)
 	ssmapi.RegisterService(registry)
 

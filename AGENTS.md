@@ -3,65 +3,19 @@
 本仓库是 `SagerNet/sing-box` 的二开仓库。上游地址：
 https://github.com/SagerNet/sing-box 。
 
-## 分支
+分支管理、上游同步、Tag 和版本、构建与发布约定见 [仓库维护与发布文档](docs/repository-maintenance.md)。涉及这些操作时，先阅读并遵循该文档。
 
-| 分支 | 初始来源 | 维护方式 |
-| --- | --- | --- |
-| `main` | 上游 `stable` | 默认分支，保存二开代码、维护文档和本仓库的 CI/发布配置 |
-| `stable` | 上游 `stable` | 纯镜像，每小时强制同步；不得提交二开代码 |
-| `testing` | 上游 `testing` | 纯镜像，每小时强制同步；不得提交二开代码 |
-| `feature/*`、`fix/*` | `main` | 完成开发和验证后，通过 PR 合并回 `main` |
+## 代码风格与上游一致性
 
-- 上游 remote 名称为 `upstream`，本仓库 remote 名称为 `origin`。
-- `stable/testing` 会被覆盖，不能作为二开功能的长期存放位置。
-- `main` 不自动合并上游，也不做强制重置。通过 `stable -> main` 的更新 PR 接入上游稳定版，解决冲突后验证。
-- 更新长期分支时保留共同历史，使用 merge；不要 rebase 或强推已共享、已发布的 `main` 历史。
-- 如需上游 testing 的个别修复，经过评估后 cherry-pick；不要直接把整个 testing 合并到稳定二开分支。
-- 上游变更与本仓库 CI 冲突时，保留本仓库的分支、tag、镜像地址和发布策略。
-
-## 上游同步
-
-`.github/workflows/sync-upstream.yml` 位于默认分支 `main`，每小时第 17 分钟执行，也支持手动执行。
-
-- 将本仓库 `stable/testing` 分别强制同步到上游同名分支，包括上游回退、改写历史的情况。
-- 原样导入上游 tags；已有 tag 指向不一致时失败，不覆盖、不删除已有 tag。
-- 同步任务不得创建、覆盖或删除 `*-custom` tag，不创建上游版本的 GitHub Release。
-- 默认使用 `GITHUB_TOKEN`。如同步 workflow 文件遇到权限拒绝，配置仅授权本仓库、具有 Contents 和 Workflows 写权限的 `UPSTREAM_SYNC_TOKEN` Secret。
-- 分支保护和 rulesets 必须允许同步身份更新、强推镜像分支；`main` 应禁止强推，并要求 PR/CI。
-- GitHub 定时任务可能延迟；公开仓库长期无活动时可能自动停用，需在 Actions 页面检查并重新启用。
-- 上游的 stale issues 定时任务仅允许在上游仓库运行，避免默认分支切换后自动关闭本 fork 的 issue/PR。
-
-## Tag 和版本
-
-- 上游 tags（如 `v1.14.4`）保留原名和原始指向，只能指向上游提交。
-- 所有二开发行 tag 必须以 `v` 开头、以 `-custom` 结尾，例如：
-  - `v1.14.4-custom`：基于上游 1.14.4 的首次二开发行。
-  - `v1.14.4-2-custom`：同一上游基础上的第二次发行；后续递增数字。
-  - `v1.15.0-alpha.13-custom`：基于上游预发布版的二开发行。
-- 发布 tag 必须指向已经进入 `origin/main` 的确定提交；已发布的 tag 永远不能移动、覆盖或复用。
-- 日常构建使用 `1.14.4-dev.N.gCOMMIT-custom` 这类版本，只保留 Actions Artifacts，不推送日常构建 tag。
-- `-custom` 是二开标识。SemVer 工具会把它视为预发布字段，不能用该后缀自动判断 GitHub Release 是否稳定。
-- `.github/custom_version.sh` 是本仓库构建版本的来源。不要用上游的 nightly 版本推导逻辑替换它，否则可能丢失 custom 后缀或 revision。
-- APK 内部版本通过 `.github/apk_version.sh` 转换成支持的 `_pN` 等后缀；附件名及二进制版本保留完整 custom 标识。
-
-## 构建与发布
-
-1. 完成 `main` 的功能及上游更新 PR，确认 CI 通过。
-2. 拉取最新 main，在确定的提交上创建 annotated tag，例如 `v1.14.4-custom`，只推送该 tag。
-3. `Build` workflow 响应 main 推送和 `v*-custom` tag 推送：main 生成日常构建产物，tag 构建完成后创建 Draft Release。
-4. 检查 Draft Release 的附件、版本和变更说明，写明上游基础 tag/SHA、二开改动和已知问题，再发布。
-5. 基于 alpha/beta/rc 的 Release 标记为 Pre-release；验证通过的稳定二开版可手动设为 Latest。
-6. 发布后有修复时创建新的 revision tag，不替换已发布 Release 的构建附件。
-
-手动运行 `Build` 时，version 填已经存在的 custom tag（可带 v），默认选择 Binary；所有构建 job 必须使用该 tag 解析出的同一个提交，而不是运行时 main 的最新提交。
-
-- 核心二进制和 DEB/RPM/APK 等包默认无需上游签名密钥。包名使用 `sing-box-custom`，二进制命令仍为 `sing-box`。
-- Android、桌面和 Apple 客户端保留手动构建入口，使用前需配置自己的签名证书、应用标识、平台凭据和相应 runner；自动核心构建不触发这些发布操作。
-- Docker workflow 只发布验证过的 custom tag，目标为本仓库的 `ghcr.io/<owner>/<repo>`，不会发布到 SagerNet 的镜像仓库。
-- Docker 稳定渠道为 `latest-custom`，预发布渠道为 `latest-custom-beta`，同时保留完整版本镜像 tag。
-- `Build Linux Packages` 为手动补充包构建入口，附件上传到对应的本仓库 Draft Release，不上传到上游 Fury；发布后禁止替换附件。
-- 本地 `make release`（兼容入口 `make release_repo`）校验已有 custom tag 后触发 GitHub 的 Binary 发布构建，不使用上游 Fury/goreleaser 配置。
-- 原生客户端签名与打包仍需要各平台真实构建验证；不要把 shell/YAML 检查等同于发布构建成功。
+- 修改前先阅读同目录、同职责的现有实现，沿用其命名、文件组织、注册方式、生命周期和错误处理惯例；不要在二开模块中另建一套风格。
+- 服务、入口、出口等类型标识统一定义在 `constant` 包，通过惯用别名 `C` 引用。注册函数及 stub 的类型标识参数（如 `outboundType`）使用 `C.Type…`，不要重复写字符串字面量或在实现包中另定义同义类型常量；JSON 配置示例和契约测试中的配置值保留原文。
+- 优先复用仓库及依赖已有的语义常量和工具，如 `N.NetworkTCP` / `N.NetworkUDP`、HTTP 状态常量、`E.New` / `E.Cause`；不要用魔法值或自建包装替代已有约定。错误包装应保留底层错误链。
+- 导入分组、惯用别名和格式遵循 `.golangci.yml`（标准库、`github.com/sagernet/`、其他依赖，使用 gci 和 gofumpt）。只格式化本次涉及的文件，不为风格整理改写无关代码或已有用户修改。
+- 构造函数参数、注册回调、接口实现和结构体初始化参考相邻实现；复杂结构体及多步逻辑展开书写，避免将多个字段、语句或控制逻辑挤在一行。
+- 新增或修改 Go 代码前，必须读取所属模块 `go.mod` 的 `go` 指令，以其声明版本作为语言语法和标准库 API 的兼容基线；子模块使用各自的 `go.mod`。不得仅因本机工具链版本更高就使用超出该基线的特性，也不得为兼容更低版本保留旧式替代写法。
+- 在语义等价且适用的情况下，必须使用该 Go 版本已支持的现代语法及标准库 API，禁止继续使用已有直接替代方案的低版本兼容写法。现有代码中的旧写法不作为新增或修改代码继续沿用的理由；仅调整本次涉及的逻辑，不扩展为无关代码的全库改写。
+- 例如，Go 1.25 及以上版本中，使用 `sync.WaitGroup` 管理 goroutine 生命周期时，应使用 `wg.Go(fn)`，替代配套的 `wg.Add(1)`、`go fn()` 和函数内的 `defer wg.Done()`；转换时必须同步移除原计数操作，检查所有调用点，并遵守 `WaitGroup.Go` 的调用时序及回调不得 panic 的约定。非 goroutine 任务计数等不等价场景仍按实际语义使用 `Add` / `Done`。
+- 风格调整与功能修改保持可区分，不借风格整理改变配置契约、运行行为、构建支持范围或发布策略；修改后检查 diff 并运行相关测试。
 
 ## 修改后的验证
 
