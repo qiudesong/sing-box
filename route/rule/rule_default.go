@@ -45,6 +45,7 @@ var _ adapter.Rule = (*DefaultRule)(nil)
 
 type DefaultRule struct {
 	abstractDefaultRule
+	bgpBypass *BGPBypassItem
 }
 
 type RuleItem interface {
@@ -58,10 +59,19 @@ func NewDefaultRule(ctx context.Context, logger log.ContextLogger, options optio
 		return nil, E.Cause(err, "action")
 	}
 	rule := &DefaultRule{
-		abstractDefaultRule{
+		abstractDefaultRule: abstractDefaultRule{
 			invert: options.Invert,
 			action: action,
 		},
+	}
+	if options.BGPBypass != "" {
+		item, err := NewBGPBypassItem(ctx, options)
+		if err != nil {
+			return nil, err
+		}
+		rule.bgpBypass = item
+		rule.items = append(rule.items, item)
+		rule.allItems = append(rule.allItems, item)
 	}
 	router := service.FromContext[adapter.Router](ctx)
 	networkManager := service.FromContext[adapter.NetworkManager](ctx)

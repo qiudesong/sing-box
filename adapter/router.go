@@ -145,6 +145,8 @@ type DNSRuleSetUpdateValidator interface {
 
 // ip_version is not a headless-rule item, so ContainsIPVersionRule is intentionally absent.
 type RuleSetMetadata struct {
+	ContainsNonDNSBypassRule bool
+	IPCIDRUnion              bool
 	ContainsProcessRule      bool
 	ContainsWIFIRule         bool
 	ContainsIPCIDRRule       bool

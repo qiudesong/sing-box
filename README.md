@@ -8,6 +8,9 @@ The universal proxy platform.
 
 https://sing-box.sagernet.org
 
+Fork feature: [GoBGP 按需旁路设计、配置与部署](docs/bgp-bypass.md)
+([完整配置 example](docs/examples/bgp-bypass.json), `with_bgp`；透明部署示例为 Linux).
+
 ## License
 
 ```

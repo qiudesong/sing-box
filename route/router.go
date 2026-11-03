@@ -38,6 +38,7 @@ type Router struct {
 	network                      adapter.NetworkManager
 	httpClientManager            adapter.HTTPClientManager
 	rules                        []adapter.Rule
+	hasBGPBypass                 bool
 	needFindProcess              bool
 	ruleSetNeedFindProcess       atomic.Bool
 	ruleSetNeedFindProcessAccess sync.Mutex
@@ -88,6 +89,9 @@ func (r *Router) Initialize(rules []option.Rule, ruleSets []option.RuleSet) erro
 			return E.Cause(err, "parse rule[", i, "]")
 		}
 		r.rules = append(r.rules, rule)
+		if binding, ok := rule.(adapter.BGPBypassRule); ok && binding.BGPBypassService() != "" {
+			r.hasBGPBypass = true
+		}
 	}
 	for i, options := range ruleSets {
 		for _, tag := range options.Tag {

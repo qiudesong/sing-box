@@ -143,6 +143,7 @@ jobs:
           else
             TAGS=$(cat release/DEFAULT_BUILD_TAGS_OTHERS)
           fi
+          TAGS="${TAGS},with_bgp"
           echo "BUILD_TAGS=${TAGS}" >> "${GITHUB_ENV}"
       - name: Set shared ldflags
         run: |

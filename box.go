@@ -475,6 +475,23 @@ func New(options Options) (*Box, error) {
 	if err != nil {
 		return nil, E.Cause(err, "initialize router")
 	}
+	if err := router.ValidateConfiguration(options.Options); err != nil {
+		return nil, E.Cause(err, "validate route")
+	}
+	for _, component := range serviceManager.Services() {
+		if validator, ok := component.(adapter.ConfigurationValidator); ok {
+			if err := validator.ValidateConfiguration(options.Options); err != nil {
+				return nil, E.Cause(err, "validate service ", component.Tag())
+			}
+		}
+	}
+	for _, component := range outboundManager.Outbounds() {
+		if validator, ok := component.(adapter.ConfigurationValidator); ok {
+			if err := validator.ValidateConfiguration(options.Options); err != nil {
+				return nil, E.Cause(err, "validate outbound ", component.Tag())
+			}
+		}
+	}
 	return &Box{
 		network:             networkManager,
 		endpoint:            endpointManager,

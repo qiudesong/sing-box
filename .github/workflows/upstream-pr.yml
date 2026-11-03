@@ -1,0 +1,44 @@
+name: Upstream update PR
+
+on:
+  workflow_run:
+    workflows: [Sync upstream]
+    types: [completed]
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: upstream-update-pr
+  cancel-in-progress: false
+
+jobs:
+  update:
+    if: >-
+      github.ref == 'refs/heads/main' &&
+      (github.event_name == 'workflow_dispatch' || github.event.workflow_run.conclusion == 'success')
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check dedicated token
+        id: token
+        env:
+          PR_TOKEN: ${{ secrets.UPSTREAM_PR_TOKEN }}
+        run: |
+          if [[ -n "$PR_TOKEN" ]]; then
+            echo 'available=true' >> "$GITHUB_OUTPUT"
+          else
+            echo '::notice::Configure UPSTREAM_PR_TOKEN with repository Contents, Pull requests and Workflows write permissions to enable update PRs.'
+          fi
+      - uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8
+        if: steps.token.outputs.available == 'true'
+        with:
+          ref: main
+          fetch-depth: 0
+          token: ${{ secrets.UPSTREAM_PR_TOKEN }}
+      - name: Maintain reviewable update branch
+        if: steps.token.outputs.available == 'true'
+        env:
+          GH_TOKEN: ${{ secrets.UPSTREAM_PR_TOKEN }}
+        run: bash .github/update_upstream_pr.sh
