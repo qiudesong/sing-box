@@ -134,24 +134,6 @@ func normalize(o *option.BGPBypassServiceOptions) error {
 			}
 		}
 	}
-	obs := &o.Observability
-	if obs.Listen == "" {
-		obs.Listen = "127.0.0.1"
-	}
-	if obs.ListenPort != 0 {
-		a, e := netip.ParseAddr(obs.Listen)
-		if e != nil {
-			return e
-		}
-		if !a.IsLoopback() && obs.Secret == "" {
-			return E.New("non-loopback observability requires secret")
-		}
-	}
-	if obs.HealthPort != 0 {
-		if _, e := netip.ParseAddr(obs.HealthListen); e != nil {
-			return E.Cause(e, "health_listen")
-		}
-	}
 	return nil
 }
 

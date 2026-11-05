@@ -852,15 +852,18 @@ func normalizeGPT5Model(model string) string {
 }
 
 func calculateCost(stats UsageStats, model string, serviceTier string, contextWindow int) float64 {
+	return roundCost(calculateRawCost(stats, model, serviceTier, contextWindow))
+}
+
+// Keep fractional cents for metrics; JSON presentation uses calculateCost.
+func calculateRawCost(stats UsageStats, model string, serviceTier string, contextWindow int) float64 {
 	pricing := getPricing(model, serviceTier, contextWindow)
 
 	regularInputTokens := max(stats.InputTokens-stats.CachedTokens, 0)
 
-	cost := (float64(regularInputTokens)*pricing.InputPrice +
+	return (float64(regularInputTokens)*pricing.InputPrice +
 		float64(stats.OutputTokens)*pricing.OutputPrice +
 		float64(stats.CachedTokens)*pricing.CachedInputPrice) / 1_000_000
-
-	return math.Round(cost*100) / 100
 }
 
 func roundCost(cost float64) float64 {

@@ -1,4 +1,12 @@
 {
+  "observability": {
+    "listen": "127.0.0.1",
+    "listen_port": 9098,
+    "metrics": true,
+    "diagnostics": true,
+    "health_listen": "192.168.66.2",
+    "health_port": 9099
+  },
   "log": {
     "level": "info"
   },
@@ -183,14 +191,6 @@
         "commit_timeout": "250ms",
         "settle_delay": "100ms",
         "withdraw_delay": "60s"
-      },
-      "observability": {
-        "listen": "127.0.0.1",
-        "listen_port": 9098,
-        "metrics": true,
-        "diagnostics": true,
-        "health_listen": "192.168.66.2",
-        "health_port": 9099
       }
     }
   ]

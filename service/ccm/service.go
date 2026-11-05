@@ -124,6 +124,7 @@ type Service struct {
 	userManager    *UserManager
 	accessMutex    sync.RWMutex
 	usageTracker   *AggregatedUsage
+	usageMetrics   *usageMetrics
 }
 
 func NewService(ctx context.Context, logger log.ContextLogger, tag string, options option.CCMServiceOptions) (adapter.Service, error) {
@@ -225,6 +226,8 @@ func (s *Service) Start(stage adapter.StartStage, scope *adapter.Scope) error {
 			})
 		}
 	}
+
+	s.restoreUsageMetrics()
 
 	router := chi.NewRouter()
 	router.Mount("/", s)
@@ -338,7 +341,7 @@ func (s *Service) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	var requestModel string
 	var messagesCount int
 
-	if s.usageTracker != nil && r.Body != nil {
+	if s.usageTrackingEnabled() && r.Body != nil {
 		bodyBytes, err := io.ReadAll(r.Body)
 		if err == nil {
 			var request struct {
@@ -376,7 +379,7 @@ func (s *Service) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 
 	serviceOverridesAcceptEncoding := len(s.httpHeaders.Values("Accept-Encoding")) > 0
-	if s.usageTracker != nil && !serviceOverridesAcceptEncoding {
+	if s.usageTrackingEnabled() && !serviceOverridesAcceptEncoding {
 		// Strip Accept-Encoding so Go Transport adds it automatically
 		// and transparently decompresses the response for correct usage counting.
 		proxyRequest.Header.Del("Accept-Encoding")
@@ -410,7 +413,7 @@ func (s *Service) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 	w.WriteHeader(response.StatusCode)
 
-	if s.usageTracker != nil && response.StatusCode == http.StatusOK {
+	if s.usageTrackingEnabled() && response.StatusCode == http.StatusOK {
 		s.handleResponseWithTracking(w, response, requestModel, anthropicBetaHeader, messagesCount, username)
 	} else {
 		mediaType, _, err := mime.ParseMediaType(response.Header.Get("Content-Type"))
@@ -469,7 +472,7 @@ func (s *Service) handleResponseWithTracking(writer http.ResponseWriter, respons
 			if responseModel != "" {
 				totalInputTokens := usage.InputTokens + usage.CacheCreationInputTokens + usage.CacheReadInputTokens
 				contextWindow := detectContextWindow(anthropicBetaHeader, totalInputTokens)
-				s.usageTracker.AddUsageWithCycleHint(
+				s.recordUsage(
 					responseModel,
 					contextWindow,
 					messagesCount,
@@ -570,7 +573,7 @@ func (s *Service) handleResponseWithTracking(writer http.ResponseWriter, respons
 				if responseModel != "" {
 					totalInputTokens := accumulatedUsage.InputTokens + accumulatedUsage.CacheCreationInputTokens + accumulatedUsage.CacheReadInputTokens
 					contextWindow := detectContextWindow(anthropicBetaHeader, totalInputTokens)
-					s.usageTracker.AddUsageWithCycleHint(
+					s.recordUsage(
 						responseModel,
 						contextWindow,
 						messagesCount,

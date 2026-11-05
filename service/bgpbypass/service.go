@@ -253,9 +253,6 @@ func (s *Service) Start(stage adapter.StartStage, scope *adapter.Scope) error {
 			unregister()
 			return nil
 		})
-		if err := s.startHTTP(scope); err != nil {
-			return err
-		}
 		s.startDNSProbe()
 		s.wg.Go(func() {
 			ticker := time.NewTicker(5 * time.Second)

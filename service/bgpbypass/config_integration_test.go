@@ -33,6 +33,11 @@ func example(t *testing.T) string {
 }
 
 func checkConfig(raw string) error {
+	// BGP configuration contracts also run without the optional exporter.
+	return checkConfigWithMetrics(raw, false)
+}
+
+func checkConfigWithMetrics(raw string, enableMetrics bool) error {
 	ctx := configContext()
 	var o option.Options
 	if err := json.UnmarshalContext(ctx, []byte(raw), &o); err != nil {
@@ -40,6 +45,9 @@ func checkConfig(raw string) error {
 	}
 	if runtime.GOOS != "linux" && o.Route != nil {
 		o.Route.DefaultMark = 0
+	}
+	if o.Observability != nil && !enableMetrics {
+		o.Observability.Metrics = false
 	}
 	instance, err := box.New(box.Options{Context: ctx, Options: o})
 	if err == nil {

@@ -11,7 +11,6 @@ type BGPBypassServiceOptions struct {
 	ExcludePrefixes  []string                   `json:"exclude_prefixes,omitempty"`
 	Limits           BGPBypassLimits            `json:"limits,omitempty"`
 	Timing           BGPBypassTiming            `json:"timing,omitempty"`
-	Observability    BGPBypassObservability     `json:"observability,omitempty"`
 }
 
 type BGPBypassBGPOptions struct {
@@ -50,14 +49,4 @@ type BGPBypassTiming struct {
 	CommitTimeout badoption.Duration  `json:"commit_timeout,omitempty"`
 	SettleDelay   *badoption.Duration `json:"settle_delay,omitempty"`
 	WithdrawDelay *badoption.Duration `json:"withdraw_delay,omitempty"`
-}
-
-type BGPBypassObservability struct {
-	Listen       string `json:"listen,omitempty"`
-	ListenPort   uint16 `json:"listen_port,omitempty"`
-	Metrics      bool   `json:"metrics,omitempty"`
-	Diagnostics  bool   `json:"diagnostics,omitempty"`
-	Secret       string `json:"secret,omitempty"`
-	HealthListen string `json:"health_listen,omitempty"`
-	HealthPort   uint16 `json:"health_port,omitempty"`
 }

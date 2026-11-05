@@ -145,7 +145,10 @@ func (s *StatsService) RoutedFlow(ctx context.Context, metadata adapter.InboundC
 		downlinkCounter = append(downlinkCounter, s.loadOrCreateCounter("user>>>"+user+">>>traffic>>>downlink"))
 	}
 	s.access.Unlock()
-	return &statsFlowTracker{uplinkCounter: uplinkCounter, downlinkCounter: downlinkCounter}
+	return &statsFlowTracker{
+		uplinkCounter:   uplinkCounter,
+		downlinkCounter: downlinkCounter,
+	}
 }
 
 var _ tun.FlowTracker = (*statsFlowTracker)(nil)

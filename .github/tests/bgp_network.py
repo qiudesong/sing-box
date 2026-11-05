@@ -270,11 +270,11 @@ def main(binary):
         service = config["services"][0]
         service.update(advertise=True, state_path=str(work / "state.json"))
         service["timing"].update(withdraw_delay="1s", settle_delay="0s")
-        service["observability"].update(health_listen="192.168.66.2")
+        config["observability"].update(health_listen="192.168.66.2")
         path = work / "config.json"
         path.write_text(json.dumps(config))
         app = spawn("s", "sing-box", binary, "run", "-c", str(path))
-        wait_for("DNS and BGP readiness", lambda: subprocess.run(["ip", "netns", "exec", namespaces["c"], "python3", "-c", "import urllib.request; urllib.request.urlopen('http://192.168.66.2:9099/readyz',timeout=1)"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL).returncode == 0)
+        wait_for("DNS and BGP readiness", lambda: subprocess.run(["ip", "netns", "exec", namespaces["c"], "python3", "-c", "import urllib.request; urllib.request.urlopen('http://192.168.66.2:9099/services/bgp-bypass/bypass-control/readyz',timeout=1)"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL).returncode == 0)
         # Cold DNS, convergence and actual transparent proxying in both families.
         for kind, ip in (("A", "11.0.0.2"), ("AAAA", "2001:4860:ffff::2")):
             query(kind)

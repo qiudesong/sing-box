@@ -27,11 +27,11 @@ jobs:
         with:
           go-version: '1.26.x'
       - name: Enabled registry, BGP session and persistence contracts
-        run: go test -tags with_bgp ./include ./service/bgpbypass
+        run: go test -tags "with_bgp,with_prometheus" ./include ./service/bgpbypass
       - name: Disabled feature diagnostic
-        run: go test ./include
+        run: go test ./include ./common/observability
       - name: Build with BGP
-        run: go build -tags with_bgp ./cmd/sing-box
+        run: go build -tags "with_bgp,with_prometheus" ./cmd/sing-box
   contracts:
     runs-on: ubuntu-latest
     steps:
@@ -40,24 +40,33 @@ jobs:
         with:
           go-version: '1.26.x'
       - name: Race and contracts
-        run: go test -race -tags with_bgp ./service/bgpbypass ./dns ./route ./route/rule ./include
+        run: go test -race -tags "with_bgp,with_prometheus" . ./common/observability ./service/bgpbypass ./dns ./route ./route/rule ./include
       - name: Custom release and upstream merge safeguards
         run: |
           python3 .github/tests/test_release_scripts.py
           python3 .github/tests/test_upstream_pr.py
           bash -n .github/update_upstream_pr.sh
+      - name: Prometheus without optional APIs
+        run: go test -tags with_prometheus ./common/observability ./dns ./include
+      - name: BGP without Prometheus
+        run: go test -tags with_bgp ./common/observability ./service/bgpbypass ./include
       - name: Build and check documented example
         run: |
-          go build -tags with_bgp -o /tmp/sing-box-bgp ./cmd/sing-box
+          go build -tags "with_bgp,with_prometheus" -o /tmp/sing-box-bgp ./cmd/sing-box
           /tmp/sing-box-bgp check -c docs/examples/bgp-bypass.json
           /tmp/sing-box-bgp schema > /tmp/bgp-schema.json
       - name: Compile Linux arm64
-        run: GOOS=linux GOARCH=arm64 CGO_ENABLED=0 go build -tags with_bgp -o /tmp/sing-box-bgp-arm64 ./cmd/sing-box
+        run: GOOS=linux GOARCH=arm64 CGO_ENABLED=0 go build -tags "with_bgp,with_prometheus" -o /tmp/sing-box-bgp-arm64 ./cmd/sing-box
       - name: Missing build tag diagnostic
         run: |
-          go build -o /tmp/sing-box-no-bgp ./cmd/sing-box
+          go build -tags with_prometheus -o /tmp/sing-box-no-bgp ./cmd/sing-box
           if /tmp/sing-box-no-bgp check -c docs/examples/bgp-bypass.json > /tmp/stub.log 2>&1; then exit 1; fi
           grep -q 'with_bgp' /tmp/stub.log
+      - name: Missing Prometheus build tag diagnostic
+        run: |
+          go build -tags with_bgp -o /tmp/sing-box-no-prometheus ./cmd/sing-box
+          if /tmp/sing-box-no-prometheus check -c docs/examples/bgp-bypass.json > /tmp/prometheus-stub.log 2>&1; then exit 1; fi
+          grep -q 'with_prometheus' /tmp/prometheus-stub.log
       - name: DNS fuzz smoke
         run: go test ./service/bgpbypass -run '^$' -fuzz '^FuzzDNSLearning$' -fuzztime 10s
       - name: Microbenchmarks

@@ -92,6 +92,14 @@ sudo mkdir -p /etc/nftables.d /etc/sing-box
 
 ```json
 {
+  "observability": {
+    "listen": "127.0.0.1",
+    "listen_port": 9098,
+    "metrics": true,
+    "diagnostics": true,
+    "health_listen": "192.168.66.2",
+    "health_port": 9099
+  },
   "log": {
     "level": "info"
   },
@@ -255,14 +263,6 @@ sudo mkdir -p /etc/nftables.d /etc/sing-box
         "commit_timeout": "250ms",
         "settle_delay": "100ms",
         "withdraw_delay": "60s"
-      },
-      "observability": {
-        "listen": "127.0.0.1",
-        "listen_port": 9098,
-        "metrics": true,
-        "diagnostics": true,
-        "health_listen": "192.168.66.2",
-        "health_port": 9099
       }
     }
   ]
@@ -902,7 +902,7 @@ sudo systemctl enable --now bgp-bypass-network6.service
 ```sh
 sudo systemctl enable --now sing-box-bypass.service
 curl -fsS http://127.0.0.1:9098/livez
-curl -fsS http://127.0.0.1:9098/dns-readyz
+curl -fsS http://127.0.0.1:9098/services/bgp-bypass/bypass-control/dns-readyz
 ```
 
 如果是在运行中的 IPv4 部署上增加 IPv6，先按第 7 节回切 DNS、撤路并停止 sing-box，再应用 IPv6 文件及 drop-in；检查通过后按本节启动，重新执行对应验收。
@@ -919,7 +919,7 @@ curl -fsS http://127.0.0.1:9098/dns-readyz
     :if ([:typeof $bgpBypassDNSGood] = "nothing") do={ :set bgpBypassDNSGood 0; }
     :local ok false;
     :do {
-        :local result [/tool fetch url="http://192.168.66.2:9099/dns-readyz" src-address=192.168.66.1 http-method=get http-max-redirect-count=0 idle-timeout=2s duration=3s output=user as-value];
+        :local result [/tool fetch url="http://192.168.66.2:9099/services/bgp-bypass/bypass-control/dns-readyz" src-address=192.168.66.1 http-method=get http-max-redirect-count=0 idle-timeout=2s duration=3s output=user as-value];
         :if (($result->"status") = "finished") do={
             :if (($result->"data") = "ok\n") do={ :set ok true; }
         }
@@ -941,7 +941,7 @@ curl -fsS http://127.0.0.1:9098/dns-readyz
 /system scheduler add name=bgp-bypass-dns-check start-time=startup interval=5s on-event=bgp-bypass-dns-check policy=read,write,test disabled=yes
 ```
 
-HTTP 非成功响应或超时按失败处理，同时核对正文，不能把 `/livez` 替换进来。`/dns-readyz` 的内部探测只表示内部 DNS 路由可解析根 NS，不验证每个按域名选择的上游、客户端入口或 IPv6 数据链路。真实双栈 DNS 和业务访问还需下面的验收。
+HTTP 非成功响应或超时按失败处理，同时核对正文，不能把 `/livez` 替换进来。`/services/bgp-bypass/bypass-control/dns-readyz` 的内部探测只表示内部 DNS 路由可解析根 NS，不验证每个按域名选择的上游、客户端入口或 IPv6 数据链路。真实双栈 DNS 和业务访问还需下面的验收。
 
 **NAT 状态边界：** RouterOS 只在连接首包选择 NAT；切换规则不撤销已存在的 DNS conntrack。失败时新 DNS 流会回到 RouterOS，已建立 TCP DNS 或复用 UDP 源端口的映射可能继续指向 Linux，直到过期或应用重连。若要求更快切换，应按目标版本字段精确删除本方案的 DNS conntrack 项；本文不提供清空全表的脚本，也不承诺无窗口回切。正常恢复后，旧的直连 DNS conntrack 同样可能延迟进入 Linux。
 
@@ -953,7 +953,7 @@ HTTP 非成功响应或超时按失败处理，同时核对正文，不能把 `/
 4. 验收后放宽到对应地址族的主机路由过滤范围，手动运行健康脚本验证动作，再启用调度器。
 
 ```sh
-curl -fsS 'http://127.0.0.1:9098/routes?limit=100'
+curl -fsS 'http://127.0.0.1:9098/services/bgp-bypass/bypass-control/routes?limit=100'
 curl -fsS http://127.0.0.1:9098/metrics
 journalctl -u sing-box-bypass.service -n 100 --no-pager
 ```
@@ -963,7 +963,7 @@ journalctl -u sing-box-bypass.service -n 100 --no-pager
 /system scheduler enable [find where name="bgp-bypass-dns-check"]
 ```
 
-`/routes/{实际IP}` 可查看租约、规则和冲突。若目标版本不支持 `where bgp`，用路由 `print detail` 按前缀查询。3/9 秒是 BGP 计时器，不是端到端恢复保证，还涉及探测周期及 NAT 状态。
+`/services/bgp-bypass/bypass-control/routes/{实际IP}` 可查看租约、规则和冲突。若目标版本不支持 `where bgp`，用路由 `print detail` 按前缀查询。3/9 秒是 BGP 计时器，不是端到端恢复保证，还涉及探测周期及 NAT 状态。
 
 ## 6. 共用配置参数与验收
 
@@ -991,14 +991,14 @@ journalctl -u sing-box-bypass.service -n 100 --no-pager
 | `timing.commit_timeout` | `250ms` | 冷学习等待本地提交的预算；超时仍返回 DNS |
 | `timing.settle_delay` | `100ms`，允许 `0s` | 新通告提交后的缓冲，不是远端 FIB 确认 |
 | `timing.withdraw_delay` | `60s`，允许 `0s` | 租约和活动引用全部释放后的撤路等待 |
-| `observability.listen/listen_port` | `127.0.0.1/0` | 主观测地址；端口 0 关闭 |
-| `observability.metrics/diagnostics` | 均为 `false` | 开启指标、分页路由及 IP 解释接口 |
-| `observability.secret` | 空 | 主观测端口 Bearer Token，非 loopback 监听必填 |
-| `observability.health_listen/health_port` | 端口 0 关闭 | 独立健康端口；启用时地址必填，仅提供健康路径 |
+| 顶层 `observability.listen/listen_port` | `127.0.0.1/0` | 主观测地址；端口 0 关闭 |
+| 顶层 `observability.metrics/diagnostics` | 均为 `false` | 开启指标、分页路由及 IP 解释接口 |
+| 顶层 `observability.secret` | 空 | 主观测端口 Bearer Token，非 loopback 监听必填 |
+| 顶层 `observability.health_listen/health_port` | 端口 0 关闭 | 独立健康端口；地址默认 loopback，仅提供健康路径 |
 
 原生业务规则按顺序首匹配，保留 sing-box 本身的条件组合语义。DNS 预判仅使用域名、目标 IP、IP 版本、规则集及其逻辑组合；`inbound` 条件须对全部 `dns_inbounds` 有相同的包含关系。含端口、网络类型、源地址、进程、嗅探等不可用条件的整条规则跳过，逻辑规则不拆分或放宽；嗅探、解析、DNS 劫持、route-options、bypass 及改写目标地址/端口的动作不执行。可评估的 reject 规则表示不引流，不在 DNS 阶段执行拒绝。没有匹配时使用原生默认出口。
 
-可评估规则引用的规则集若含不可用条件，启动或热更新会报错。动态集合接入规则始终排除在预判之外，防止学习结果反过来影响学习。启动日志和 `/routes` 的 `dns_preflight_skipped_rules` 列出被跳过的原生规则序号（从 0 开始）。观察模式仍检查完整配置。
+可评估规则引用的规则集若含不可用条件，启动或热更新会报错。动态集合接入规则始终排除在预判之外，防止学习结果反过来影响学习。启动日志和 `/services/bgp-bypass/bypass-control/routes` 的 `dns_preflight_skipped_rules` 列出被跳过的原生规则序号（从 0 开始）。观察模式仍检查完整配置。
 
 固定路由最长前缀匹配，相同前缀不同出口报错。固定前缀若短于主机路由，需在对应地址族的 RouterOS 接收过滤器中明确放行该前缀和长度，不能开放所有长度。不要让代理启动 DNS 依赖固定代理路由。
 

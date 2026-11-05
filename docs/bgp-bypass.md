@@ -34,7 +34,7 @@
 
 复用原生规则对象的 Match，不复制域名/IP 匹配实现。支持域名、目标 IP、IP 版本、可评估规则集及其布尔组合，条件组合遵循原生语义，包括域名形式之间的 OR。`inbound` 条件必须对服务所有 `dns_inbounds` 有相同包含关系，不按客户端或入口分别存储决策。
 
-端口、网络类型、进程、源地址、嗅探等未知条件导致整条规则被跳过，不能删除未知条件后继续匹配；逻辑规则同样整体处理。非终结动作、DNS 劫持、bypass、目标改写不在预判中执行。可评估的 reject 表示不产生代理学习结果。未命中使用原生默认出口。被跳过规则的 0 起始序号写入日志和 `/routes` 的 `dns_preflight_skipped_rules`。
+端口、网络类型、进程、源地址、嗅探等未知条件导致整条规则被跳过，不能删除未知条件后继续匹配；逻辑规则同样整体处理。非终结动作、DNS 劫持、bypass、目标改写不在预判中执行。可评估的 reject 表示不产生代理学习结果。未命中使用原生默认出口。被跳过规则的 0 起始序号写入日志和 `/services/bgp-bypass/bypass-control/routes` 的 `dns_preflight_skipped_rules`。
 
 可评估规则引用的规则集若含不支持条件，配置和更新会报错；动态集合规则自身始终不参加预判，防止反馈。新增上游条件默认不可预判，需检查后加入允许列表。规则集更新仍通过原生验证/回调触发有效租约重算。
 
@@ -64,13 +64,13 @@ GoBGP 只导出本模块路由、拒绝导入、不开放管理 gRPC，禁用 GR
 
 [模块 README](../service/bgpbypass/README.md) 分别提供 IPv4 和 IPv6 的完整部署步骤：隔离传输网、独立直连表、双栈 TPROXY、FastTrack 排除、systemd 及 DNS 回切。详细诊断默认 loopback，独立健康端口限制来源。
 
-`/livez` 仅表示运行。`/dns-readyz` 每 5 秒通过内部 DNS 路由无缓存查询根 NS，超时 3 秒；不能据此保证每个域名 DNS 上游、客户端入口和地址族都正常。`/readyz` 还检查配置、邻居和本地对账新鲜度，不表示代理出口可用。DNS 回切使用 `/dns-readyz`，同时验收实际双栈 DNS 和 NAT 状态。
+`/livez` 仅表示运行。`/services/bgp-bypass/bypass-control/dns-readyz` 每 5 秒通过内部 DNS 路由无缓存查询根 NS，超时 3 秒；不能据此保证每个域名 DNS 上游、客户端入口和地址族都正常。`/services/bgp-bypass/bypass-control/readyz` 还检查配置、邻居和本地对账新鲜度，不表示代理出口可用。DNS 回切使用 `/services/bgp-bypass/bypass-control/dns-readyz`，同时验收实际双栈 DNS 和 NAT 状态。
 
 ## 观测与排障
 
 ```sh
-curl http://127.0.0.1:9098/routes?limit=100
-curl http://127.0.0.1:9098/routes/8.8.8.8
+curl http://127.0.0.1:9098/services/bgp-bypass/bypass-control/routes?limit=100
+curl http://127.0.0.1:9098/services/bgp-bypass/bypass-control/routes/8.8.8.8
 curl http://127.0.0.1:9098/metrics
 ```
 
