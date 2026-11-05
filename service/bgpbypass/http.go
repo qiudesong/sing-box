@@ -1,12 +1,8 @@
 package bgpbypass
 
 import (
-	"crypto/subtle"
 	"encoding/json"
-	"errors"
-	"fmt"
 	"maps"
-	"net"
 	"net/http"
 	"net/netip"
 	"slices"
@@ -15,42 +11,8 @@ import (
 	"time"
 
 	"github.com/sagernet/sing-box/adapter"
-	N "github.com/sagernet/sing/common/network"
+	C "github.com/sagernet/sing-box/constant"
 )
-
-func (s *Service) startHTTP(scope *adapter.Scope) error {
-	o := s.config.options.Observability
-	start := func(address string, port uint16, handler http.Handler) error {
-		listener, err := net.Listen(N.NetworkTCP, net.JoinHostPort(address, strconv.Itoa(int(port))))
-		if err != nil {
-			return err
-		}
-		server := &http.Server{
-			Handler:           handler,
-			ReadHeaderTimeout: 5 * time.Second,
-			ReadTimeout:       10 * time.Second,
-			WriteTimeout:      10 * time.Second,
-			IdleTimeout:       30 * time.Second,
-			MaxHeaderBytes:    8192,
-		}
-		scope.Add(server.Close)
-		go func() {
-			if e := server.Serve(listener); e != nil && !errors.Is(e, http.ErrServerClosed) {
-				s.logger.Error("observability: ", e)
-			}
-		}()
-		return nil
-	}
-	if o.ListenPort != 0 {
-		if err := start(o.Listen, o.ListenPort, s.handler(false)); err != nil {
-			return err
-		}
-	}
-	if o.HealthPort != 0 {
-		return start(o.HealthListen, o.HealthPort, s.handler(true))
-	}
-	return nil
-}
 
 func (s *Service) ready() bool {
 	if !s.running.Load() || !s.configValid.Load() || !s.dnsReady.Load() {
@@ -71,89 +33,74 @@ func (s *Service) ready() bool {
 	return true
 }
 
-func (s *Service) handler(healthOnly bool) http.Handler {
-	mux := http.NewServeMux()
-	check := func(predicate func() bool) http.HandlerFunc {
-		return func(w http.ResponseWriter, r *http.Request) {
-			if r.Method != http.MethodGet {
-				w.WriteHeader(http.StatusMethodNotAllowed)
-				return
-			}
-			w.Header().Set("Cache-Control", "no-store")
-			if !predicate() {
-				http.Error(w, "not ready", http.StatusServiceUnavailable)
-				return
-			}
-			fmt.Fprintln(w, "ok")
-		}
+func (s *Service) HealthChecks() map[string]func() bool {
+	return map[string]func() bool{
+		"livez":      s.running.Load,
+		"readyz":     s.ready,
+		"dns-readyz": func() bool { return s.running.Load() && s.dnsReady.Load() },
 	}
-	mux.HandleFunc("/livez", check(s.running.Load))
-	mux.HandleFunc("/readyz", check(s.ready))
-	mux.HandleFunc("/dns-readyz", check(func() bool { return s.running.Load() && s.dnsReady.Load() }))
-	if !healthOnly {
-		if s.config.options.Observability.Metrics {
-			mux.HandleFunc("/metrics", s.metrics)
-		}
-		if s.config.options.Observability.Diagnostics {
-			mux.HandleFunc("/routes", s.routes)
-			mux.HandleFunc("/routes/", s.explain)
-		}
-	}
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.Method != http.MethodGet {
-			w.WriteHeader(http.StatusMethodNotAllowed)
-			return
-		}
-		secret := s.config.options.Observability.Secret
-		if !healthOnly && secret != "" && subtle.ConstantTimeCompare([]byte(r.Header.Get("Authorization")), []byte("Bearer "+secret)) != 1 {
-			http.Error(w, "unauthorized", http.StatusUnauthorized)
-			return
-		}
-		mux.ServeHTTP(w, r)
-	})
 }
 
-func (s *Service) metrics(w http.ResponseWriter, _ *http.Request) {
-	w.Header().Set("Content-Type", "text/plain; version=0.0.4")
+func (s *Service) RegisterDiagnostics(mux *http.ServeMux) {
+	mux.HandleFunc("/routes", s.routes)
+	mux.HandleFunc("/routes/{ip}", s.explain)
+}
+
+func (s *Service) CollectMetrics(emit func(adapter.Metric), _ []string) {
 	snap := s.snapshot.Load()
-	metric := func(name, kind string, value any) {
-		fmt.Fprintf(w, "# TYPE sing_box_bgp_bypass_%s %s\nsing_box_bgp_bypass_%s{service=%q} %v\n", name, kind, name, s.Tag(), value)
+	metric := func(name string, kind adapter.MetricType, value float64) {
+		emit(adapter.Metric{
+			Name:   C.MetricNamePrefixBGPBypass + name,
+			Type:   kind,
+			Value:  value,
+			Labels: map[string]string{C.MetricLabelService: s.Tag()},
+		})
 	}
-	metric("desired_routes", "gauge", len(snap.Desired))
-	metric("actual_routes", "gauge", len(snap.Actual))
-	metric("dns_associations", "gauge", s.state.count.Load())
-	metric("pending_updates", "gauge", len(s.requests))
-	metric("conflicting_addresses", "gauge", s.state.conflicts.Load())
-	metric("queue_rejected_total", "counter", s.stats.queueRejected.Load())
-	metric("capacity_rejected_total", "counter", s.stats.capacityRejected.Load())
-	metric("commit_timeout_total", "counter", s.stats.commitTimeout.Load())
-	metric("bgp_errors_total", "counter", s.stats.bgpErrors.Load())
-	metric("reconciliations_total", "counter", s.stats.reconciliations.Load())
-	metric("announced_total", "counter", s.stats.announced.Load())
-	metric("withdrawn_total", "counter", s.stats.withdrawn.Load())
-	metric("dns_wait_seconds_sum", "counter", float64(s.stats.dnsWaitNanos.Load())/1e9)
-	metric("dns_wait_seconds_count", "counter", s.stats.dnsWaitCount.Load())
-	fmt.Fprintln(w, "# TYPE sing_box_bgp_bypass_dns_observe_seconds histogram")
-	for i, path := range []string{"cold", "warm"} {
-		h := &s.dnsLatency[i]
+	metric("desired_routes", adapter.MetricGauge, float64(len(snap.Desired)))
+	metric("actual_routes", adapter.MetricGauge, float64(len(snap.Actual)))
+	metric("dns_associations", adapter.MetricGauge, float64(s.state.count.Load()))
+	metric("pending_updates", adapter.MetricGauge, float64(len(s.requests)))
+	metric("conflicting_addresses", adapter.MetricGauge, float64(s.state.conflicts.Load()))
+	metric("queue_rejected_total", adapter.MetricCounter, float64(s.stats.queueRejected.Load()))
+	metric("capacity_rejected_total", adapter.MetricCounter, float64(s.stats.capacityRejected.Load()))
+	metric("commit_timeout_total", adapter.MetricCounter, float64(s.stats.commitTimeout.Load()))
+	metric("bgp_errors_total", adapter.MetricCounter, float64(s.stats.bgpErrors.Load()))
+	metric("reconciliations_total", adapter.MetricCounter, float64(s.stats.reconciliations.Load()))
+	metric("announced_total", adapter.MetricCounter, float64(s.stats.announced.Load()))
+	metric("withdrawn_total", adapter.MetricCounter, float64(s.stats.withdrawn.Load()))
+	metric("dns_wait_seconds_sum", adapter.MetricCounter, float64(s.stats.dnsWaitNanos.Load())/1e9)
+	metric("dns_wait_seconds_count", adapter.MetricCounter, float64(s.stats.dnsWaitCount.Load()))
+	for i, reason := range []string{"cold", "warm"} {
+		histogram := &s.dnsLatency[i]
+		buckets := make(map[float64]uint64, len(dnsLatencyBounds))
 		var count uint64
-		for j := range h.buckets {
-			count += h.buckets[j].Load()
-			bound := "+Inf"
+		for j := range histogram.buckets {
+			count += histogram.buckets[j].Load()
 			if j < len(dnsLatencyBounds) {
-				bound = strconv.FormatFloat(dnsLatencyBounds[j].Seconds(), 'g', -1, 64)
+				buckets[dnsLatencyBounds[j].Seconds()] = count
 			}
-			fmt.Fprintf(w, "sing_box_bgp_bypass_dns_observe_seconds_bucket{service=%q,reason=%q,le=%q} %d\n", s.Tag(), path, bound, count)
 		}
-		fmt.Fprintf(w, "sing_box_bgp_bypass_dns_observe_seconds_sum{service=%q,reason=%q} %g\nsing_box_bgp_bypass_dns_observe_seconds_count{service=%q,reason=%q} %d\n", s.Tag(), path, float64(h.nanos.Load())/1e9, s.Tag(), path, count)
+		emit(adapter.Metric{
+			Name:    C.MetricNameBGPBypassDNSObserve,
+			Type:    adapter.MetricHistogram,
+			Labels:  map[string]string{C.MetricLabelService: s.Tag(), C.MetricLabelReason: reason},
+			Count:   count,
+			Sum:     float64(histogram.nanos.Load()) / 1e9,
+			Buckets: buckets,
+		})
 	}
-	for _, p := range s.config.options.BGP.Peers {
-		value := 0
-		if snap.Peers[p.Tag] {
+	for _, peer := range s.config.options.BGP.Peers {
+		var value float64
+		if snap.Peers[peer.Tag] {
 			value = 1
 		}
-		for _, family := range p.Families {
-			fmt.Fprintf(w, "sing_box_bgp_bypass_peer_up{service=%q,peer=%q,family=%q} %d\n", s.Tag(), p.Tag, family, value)
+		for _, family := range peer.Families {
+			emit(adapter.Metric{
+				Name:   C.MetricNameBGPBypassPeerUp,
+				Type:   adapter.MetricGauge,
+				Labels: map[string]string{C.MetricLabelService: s.Tag(), C.MetricLabelPeer: peer.Tag, C.MetricLabelFamily: family},
+				Value:  value,
+			})
 		}
 	}
 }
@@ -216,7 +163,7 @@ func (s *Service) routes(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Service) explain(w http.ResponseWriter, r *http.Request) {
-	ip, err := netip.ParseAddr(strings.TrimPrefix(r.URL.Path, "/routes/"))
+	ip, err := netip.ParseAddr(r.PathValue("ip"))
 	if err != nil {
 		http.Error(w, "invalid IP", http.StatusBadRequest)
 		return

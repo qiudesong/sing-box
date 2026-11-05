@@ -31,10 +31,14 @@ import (
 	mDNS "github.com/miekg/dns"
 )
 
-var (
-	_ adapter.DNSRouter                 = (*Router)(nil)
-	_ adapter.DNSRuleSetUpdateValidator = (*Router)(nil)
-)
+var _ RouterInstance = (*Router)(nil)
+
+type RouterInstance interface {
+	adapter.DNSRouter
+	adapter.DNSRuleSetUpdateValidator
+	adapter.DNSResponseObservable
+	Initialize(rules []option.DNSRule) error
+}
 
 type Router struct {
 	observerAccess        sync.Mutex
@@ -57,7 +61,7 @@ type Router struct {
 	closing               bool
 }
 
-func NewRouter(ctx context.Context, logFactory log.Factory, options option.DNSOptions) (*Router, error) {
+func NewRouter(ctx context.Context, logFactory log.Factory, options option.DNSOptions) (RouterInstance, error) {
 	router := &Router{
 		disableExpire:         options.DisableExpire,
 		ctx:                   ctx,
@@ -121,7 +125,14 @@ func NewRouter(ctx context.Context, logFactory log.Factory, options option.DNSOp
 	if options.ReverseMapping {
 		router.dnsReverseMapping = common.Must1(freelru.New[netip.Addr, string](1024, maphash.NewHasher[netip.Addr]().Hash32, true))
 	}
-	return router, nil
+	metrics := adapter.MetricsObserverFromContext(ctx)
+	if metrics == nil {
+		return router, nil
+	}
+	return &metricsRouter{
+		Router:  router,
+		metrics: metrics,
+	}, nil
 }
 
 func (r *Router) Initialize(rules []option.DNSRule) error {

@@ -2,6 +2,7 @@ package bgpbypass
 
 import (
 	"context"
+	"net/http"
 	"net/http/httptest"
 	"net/netip"
 	"os"
@@ -10,9 +11,12 @@ import (
 	"testing"
 	"time"
 
+	"github.com/sagernet/sing-box/adapter"
 	boxService "github.com/sagernet/sing-box/adapter/service"
+	"github.com/sagernet/sing-box/common/observability"
 	C "github.com/sagernet/sing-box/constant"
 	"github.com/sagernet/sing-box/log"
+	"github.com/sagernet/sing-box/option"
 
 	"github.com/stretchr/testify/require"
 )
@@ -82,40 +86,47 @@ func TestStateRestoreReevaluatesPolicyAndBounds(t *testing.T) {
 
 func TestHTTPAuthenticationAndPagination(t *testing.T) {
 	s := testService(t)
-	s.config.options.Observability.Secret = "token"
-	s.config.options.Observability.Diagnostics = true
-	s.config.options.Observability.Metrics = true
+	manager, err := observability.New(option.ObservabilityOptions{
+		ListenPort:  9098,
+		Diagnostics: true,
+		Secret:      "token",
+	}, log.NewNOPFactory().Logger())
+	require.NoError(t, err)
+	manager.Add(s)
 	s.snapshot.Load().Desired[netip.MustParsePrefix("8.8.8.8/32")] = true
 	s.snapshot.Load().Desired[netip.MustParsePrefix("8.8.4.4/32")] = true
-	for _, path := range []string{"/metrics", "/routes", "/routes/8.8.8.8", "/readyz"} {
-		r := httptest.NewRequest("GET", path, nil)
+	prefix := "/services/" + C.TypeBGPBypass + "/test"
+	for _, path := range []string{prefix + "/routes", prefix + "/routes/8.8.8.8", prefix + "/readyz"} {
 		w := httptest.NewRecorder()
-		s.handler(false).ServeHTTP(w, r)
-		require.Equal(t, 401, w.Code)
+		manager.Handler(false).ServeHTTP(w, httptest.NewRequest(http.MethodGet, path, nil))
+		require.Equal(t, http.StatusUnauthorized, w.Code)
 	}
-	r := httptest.NewRequest("GET", "/routes?limit=1", nil)
+	r := httptest.NewRequest(http.MethodGet, prefix+"/routes?limit=1", nil)
 	r.Header.Set("Authorization", "Bearer token")
 	w := httptest.NewRecorder()
-	s.handler(false).ServeHTTP(w, r)
-	require.Equal(t, 200, w.Code)
+	manager.Handler(false).ServeHTTP(w, r)
+	require.Equal(t, http.StatusOK, w.Code)
 	require.Contains(t, w.Body.String(), `"next":"8.8.4.4/32"`)
 	require.Contains(t, w.Body.String(), `"router_fib_confirmed":false`)
-	r = httptest.NewRequest("GET", "/metrics", nil)
-	r.Header.Set("Authorization", "Bearer token")
 	w = httptest.NewRecorder()
-	s.handler(false).ServeHTTP(w, r)
-	require.NotContains(t, w.Body.String(), "8.8.8.8")
-	require.Contains(t, w.Body.String(), "desired_routes")
+	manager.Handler(true).ServeHTTP(w, httptest.NewRequest(http.MethodGet, prefix+"/routes", nil))
+	require.Equal(t, http.StatusNotFound, w.Code)
+}
+
+func TestMetricsSnapshot(t *testing.T) {
+	s := testService(t)
 	s.dnsLatency[1].observe(time.Millisecond)
 	s.dnsLatency[1].observe(3 * time.Millisecond)
-	w = httptest.NewRecorder()
-	s.handler(false).ServeHTTP(w, r)
-	require.Contains(t, w.Body.String(), `dns_observe_seconds_bucket{service="test",reason="warm",le="0.002"} 1`)
-	require.Contains(t, w.Body.String(), `dns_observe_seconds_bucket{service="test",reason="warm",le="+Inf"} 2`)
-	require.Contains(t, w.Body.String(), `dns_observe_seconds_count{service="test",reason="warm"} 2`)
-	w = httptest.NewRecorder()
-	s.handler(true).ServeHTTP(w, httptest.NewRequest("GET", "/routes", nil))
-	require.Equal(t, 404, w.Code)
+	var histogram adapter.Metric
+	s.CollectMetrics(func(metric adapter.Metric) {
+		if metric.Name == "sing_box_bgp_bypass_dns_observe_seconds" && metric.Labels["reason"] == "warm" {
+			histogram = metric
+		}
+	}, nil)
+	require.Equal(t, adapter.MetricHistogram, histogram.Type)
+	require.EqualValues(t, 2, histogram.Count)
+	require.EqualValues(t, 1, histogram.Buckets[0.002])
+	require.InDelta(t, 0.004, histogram.Sum, 0.000001)
 }
 
 func TestObservationModeDoesNotStartBGP(t *testing.T) {

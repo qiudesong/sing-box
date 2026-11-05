@@ -73,5 +73,5 @@ func (s *Server) Start(stage adapter.StartStage, scope *adapter.Scope) error {
 }
 
 func (s *Server) StatsService() adapter.ConnectionTracker {
-	return s.statsService
+	return newMetricsTracker(s.statsService)
 }

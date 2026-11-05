@@ -75,7 +75,11 @@ func NewService(ctx context.Context, logger log.ContextLogger, tag string, optio
 			return nil, E.New("parse SSM server[", i, "]: inbound/", inbound.Type(), "[", inbound.Tag(), "] is not a SSM server")
 		}
 		traffic := NewTrafficManager()
-		managedServer.SetTracker(traffic)
+		managedServer.SetTracker(newMetricsTracker(
+			traffic,
+			adapter.MetricsObserverFromContext(ctx),
+			s.Tag()+":"+inbound.Tag(),
+		))
 		user := NewUserManager(managedServer, traffic)
 		chiRouter.Route(entry.Key, NewAPIServer(logger, traffic, user).Route)
 		s.traffics[entry.Key] = traffic

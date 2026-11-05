@@ -99,6 +99,11 @@ type Recorder struct {
 	previousGCCycles uint64
 	metricsSamples   []metrics.Sample
 
+	metricSample      memorySample
+	metricConnections int
+	metricPressure    uint64
+	metricResets      uint64
+
 	snapshotAccess     sync.Mutex
 	snapshotSequence   int
 	automaticSnapshots int
@@ -309,6 +314,8 @@ func (r *Recorder) sample(sample memorySample, state pressureState, connections 
 	if r.closed {
 		return
 	}
+	r.metricSample = sample
+	r.metricConnections = connections
 	r.observeLocked(sample)
 	if r.hasRow && state == r.lastRowState {
 		interval := normalSampleInterval
@@ -356,6 +363,7 @@ func (r *Recorder) sample(sample memorySample, state pressureState, connections 
 func (r *Recorder) recordPressure(sample memorySample) {
 	r.access.Lock()
 	defer r.access.Unlock()
+	r.metricPressure++
 	r.observeLocked(sample)
 	r.denseUntil = time.Now().Add(denseSampleWindow)
 	r.appendEventLocked(eventRecord{Type: eventTypePressure, MemoryBytes: sample.usage, AvailableBytes: sample.available})
@@ -372,6 +380,7 @@ func (r *Recorder) recordStateChange(state pressureState, sample memorySample) {
 func (r *Recorder) recordReset(reason string, before memorySample, after memorySample, connections int, reportOnly bool) {
 	r.access.Lock()
 	defer r.access.Unlock()
+	r.metricResets++
 	r.observeLocked(before)
 	r.denseUntil = time.Now().Add(denseSampleWindow)
 	r.appendEventLocked(eventRecord{

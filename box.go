@@ -15,6 +15,7 @@ import (
 	"github.com/sagernet/sing-box/common/dialer"
 	"github.com/sagernet/sing-box/common/httpclient"
 	"github.com/sagernet/sing-box/common/netns"
+	"github.com/sagernet/sing-box/common/observability"
 	"github.com/sagernet/sing-box/common/taskmonitor"
 	"github.com/sagernet/sing-box/common/tls"
 	"github.com/sagernet/sing-box/common/trafficcontrol"
@@ -29,6 +30,7 @@ import (
 	"github.com/sagernet/sing-box/option"
 	"github.com/sagernet/sing-box/protocol/direct"
 	"github.com/sagernet/sing-box/route"
+	"github.com/sagernet/sing-box/service/powerreport"
 	"github.com/sagernet/sing/common"
 	E "github.com/sagernet/sing/common/exceptions"
 	F "github.com/sagernet/sing/common/format"
@@ -51,7 +53,7 @@ type Box struct {
 	service             *boxService.Manager
 	certificateProvider *boxCertificate.Manager
 	dnsTransport        *dns.TransportManager
-	dnsRouter           *dns.Router
+	dnsRouter           dns.RouterInstance
 	connection          *route.ConnectionManager
 	router              *route.Router
 	referenceManager    *route.ReferenceManager
@@ -59,6 +61,7 @@ type Box struct {
 	internalService     []adapter.LifecycleService
 	ntpService          *ntp.Service
 	scope               *adapter.Scope
+	observability       *observability.Manager
 }
 
 type Options struct {
@@ -185,6 +188,21 @@ func New(options Options) (*Box, error) {
 	service.MustRegister[log.Factory](ctx, logFactory)
 
 	var internalServices []adapter.LifecycleService
+	var observabilityManager *observability.Manager
+	if options.Observability != nil {
+		observabilityManager, err = observability.New(*options.Observability, logFactory.NewLogger("observability"))
+		if err != nil {
+			return nil, E.Cause(err, "initialize observability")
+		}
+	}
+	var metricsObserver adapter.MetricsObserver
+	if observabilityManager != nil {
+		if powerManager := service.FromContext[*powerreport.Manager](ctx); powerManager != nil {
+			observabilityManager.Add(powerManager)
+		}
+		metricsObserver = observabilityManager.Observer
+	}
+	ctx = adapter.ContextWithMetricsObserver(ctx, metricsObserver)
 	routeOptions := common.PtrValueOrDefault(options.Route)
 	certificateOptions := common.PtrValueOrDefault(options.Certificate)
 	if C.IsAndroid || certificateOptions.Store != "" && certificateOptions.Store != C.CertificateStoreSystem ||
@@ -235,6 +253,9 @@ func New(options Options) (*Box, error) {
 	service.MustRegister[adapter.HTTPClientManager](ctx, httpClientManager)
 	httpClientService := adapter.LifecycleService(httpClientManager)
 	router := route.NewRouter(ctx, logFactory, routeOptions, dnsOptions)
+	if observabilityManager != nil && observabilityManager.Observer != nil {
+		router.AppendTracker(observabilityManager.Observer)
+	}
 	service.MustRegister[adapter.Router](ctx, router)
 	err = router.Initialize(routeOptions.Rules, routeOptions.RuleSet)
 	if err != nil {
@@ -482,6 +503,18 @@ func New(options Options) (*Box, error) {
 			}
 		}
 	}
+	if observabilityManager != nil {
+		for _, component := range serviceManager.Services() {
+			observabilityManager.Add(component)
+		}
+		for _, component := range endpointManager.Endpoints() {
+			observabilityManager.AddEndpoint(component)
+		}
+		for _, component := range outboundManager.Outbounds() {
+			observabilityManager.AddOutbound(component, service.PtrFromContext[urltest.HistoryStorage](ctx))
+		}
+		internalServices = append(internalServices, observabilityManager)
+	}
 	return &Box{
 		network:             networkManager,
 		endpoint:            endpointManager,
@@ -502,6 +535,7 @@ func New(options Options) (*Box, error) {
 		internalService:     internalServices,
 		ntpService:          ntpService,
 		scope:               adapter.NewScope(ctx, logFactory.Logger()),
+		observability:       observabilityManager,
 	}, nil
 }
 
@@ -671,6 +705,9 @@ func (s *Box) start() error {
 }
 
 func (s *Box) Close() error {
+	if s.observability != nil {
+		s.observability.Stop()
+	}
 	return s.scope.Close()
 }
 

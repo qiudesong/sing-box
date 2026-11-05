@@ -104,6 +104,12 @@ func (s *URLTest) All() []string {
 }
 
 func (s *URLTest) Selected(network string) adapter.Outbound {
+	// Metrics scrapes can read the selection while background URL tests update it.
+	// Share performUpdateCheck's lock across cached reads and the fallback Select.
+	// Updates must keep calling group.Select directly to avoid locking twice.
+	s.group.updateAccess.Lock()
+	defer s.group.updateAccess.Unlock()
+
 	var outbound adapter.Outbound
 	if network == N.NetworkUDP {
 		outbound = s.group.selectedOutboundUDP

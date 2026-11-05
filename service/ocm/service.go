@@ -139,6 +139,7 @@ type Service struct {
 	userManager    *UserManager
 	accessMutex    sync.RWMutex
 	usageTracker   *AggregatedUsage
+	usageMetrics   *usageMetrics
 	webSocketMutex sync.Mutex
 	webSocketGroup sync.WaitGroup
 	webSocketConns map[*webSocketSession]struct{}
@@ -246,6 +247,8 @@ func (s *Service) Start(stage adapter.StartStage, scope *adapter.Scope) error {
 			})
 		}
 	}
+
+	s.restoreUsageMetrics()
 
 	router := chi.NewRouter()
 	router.Mount("/", s)
@@ -390,7 +393,7 @@ func (s *Service) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 	var requestModel string
 
-	if s.usageTracker != nil && r.Body != nil {
+	if s.usageTrackingEnabled() && r.Body != nil {
 		bodyBytes, err := io.ReadAll(r.Body)
 		if err == nil {
 			var request struct {
@@ -453,9 +456,14 @@ func (s *Service) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 	w.WriteHeader(response.StatusCode)
 
-	trackUsage := s.usageTracker != nil && response.StatusCode == http.StatusOK &&
+	trackUsage := s.usageTrackingEnabled() && response.StatusCode == http.StatusOK &&
 		(path == "/v1/chat/completions" || strings.HasPrefix(path, "/v1/responses"))
 	if trackUsage {
+		// Known limitation predating metrics: an explicitly forwarded or configured
+		// Accept-Encoding disables Go Transport's automatic gzip decompression.
+		// If upstream replies with gzip, the JSON/SSE parser misses its usage, so
+		// both persisted statistics and metrics omit otherwise successful requests.
+		// The compressed response is still forwarded; this behavior is unchanged here.
 		s.handleResponseWithTracking(w, response, path, requestModel, username)
 	} else {
 		mediaType, _, err := mime.ParseMediaType(response.Header.Get("Content-Type"))
@@ -530,7 +538,7 @@ func (s *Service) handleResponseWithTracking(writer http.ResponseWriter, respons
 			}
 			if responseModel != "" {
 				contextWindow := detectContextWindow(responseModel, serviceTier, inputTokens)
-				s.usageTracker.AddUsageWithCycleHint(
+				s.recordUsage(
 					responseModel,
 					contextWindow,
 					inputTokens,
@@ -641,7 +649,7 @@ func (s *Service) handleResponseWithTracking(writer http.ResponseWriter, respons
 			if inputTokens > 0 || outputTokens > 0 {
 				if responseModel != "" {
 					contextWindow := detectContextWindow(responseModel, serviceTier, inputTokens)
-					s.usageTracker.AddUsageWithCycleHint(
+					s.recordUsage(
 						responseModel,
 						contextWindow,
 						inputTokens,

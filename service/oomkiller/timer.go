@@ -117,6 +117,9 @@ type adaptiveTimer struct {
 	access sync.Mutex
 	timer  *time.Timer
 	timerState
+
+	metricThresholds      pressureThresholds
+	metricThresholdsKnown bool
 }
 
 func newAdaptiveTimer(logger log.ContextLogger, network adapter.NetworkManager, connections adapter.ConnectionManager, recorder *Recorder, config timerConfig) *adaptiveTimer {
@@ -129,6 +132,8 @@ func newAdaptiveTimer(logger log.ContextLogger, network adapter.NetworkManager, 
 	}
 	if config.policyMode == policyModeMemoryLimit || config.policyMode == policyModeNetworkExtension {
 		t.limitThresholds = computeLimitThresholds(config.memoryLimit, config.safetyMargin)
+		t.metricThresholds = t.limitThresholds
+		t.metricThresholdsKnown = true
 	}
 	return t
 }
@@ -259,9 +264,14 @@ func (t *adaptiveTimer) belowTrigger(sample memorySample) bool {
 	}
 }
 
+// Called with access held. Cache the thresholds used for this sample so metrics
+// can read them together with the resulting state without sampling memory.
 func (t *adaptiveTimer) nextState(sample memorySample) pressureState {
+	t.metricThresholdsKnown = false
 	switch t.policyMode {
 	case policyModeMemoryLimit, policyModeNetworkExtension:
+		t.metricThresholds = t.limitThresholds
+		t.metricThresholdsKnown = true
 		return nextPressureState(t.state,
 			sample.usage >= t.limitThresholds.trigger,
 			sample.usage >= t.limitThresholds.armed,
@@ -271,6 +281,8 @@ func (t *adaptiveTimer) nextState(sample memorySample) pressureState {
 			return pressureStateNormal
 		}
 		thresholds := t.availableThresholds(sample)
+		t.metricThresholds = thresholds
+		t.metricThresholdsKnown = true
 		return nextPressureState(t.state,
 			sample.available <= thresholds.trigger,
 			sample.available <= thresholds.armed,
