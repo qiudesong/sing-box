@@ -73,6 +73,21 @@ jobs:
         run: go test ./service/bgpbypass -run '^$' -bench . -benchmem
       - name: Install network test dependencies
         run: sudo apt-get update && sudo apt-get install -y frr iproute2 nftables python3-dnspython
+      - name: Allow bgpd access to integration test files
+        shell: bash
+        run: |
+          if [ -f /etc/apparmor.d/bgpd ]; then
+            sudo install -d -m 0755 /etc/apparmor.d/local
+            sudo tee -a /etc/apparmor.d/local/bgpd >/dev/null <<'EOF'
+          /tmp/bgp-network-*/ r,
+          /tmp/bgp-network-*/bgpd.conf r,
+          /tmp/bgp-network-*/frr/ rw,
+          /tmp/bgp-network-*/frr/bgpd.pid rwk,
+          /tmp/bgp-network-*/frr/bgpd.vty rw,
+          /tmp/bgp-network-*/frr/zserv.api rw,
+          EOF
+            sudo apparmor_parser -r /etc/apparmor.d/bgpd
+          fi
       - name: Namespace integration with FRR
         run: sudo python3 .github/tests/bgp_network.py /tmp/sing-box-bgp
       - name: Upload network diagnostics

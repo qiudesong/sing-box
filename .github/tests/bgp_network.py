@@ -8,6 +8,7 @@ import asyncio
 import json
 import os
 from pathlib import Path
+import shlex
 import shutil
 import signal
 import socket
@@ -172,7 +173,13 @@ def main(binary):
         argv = list(args)
         if role:
             argv = ["ip", "netns", "exec", namespaces[role], *argv]
-        return subprocess.run(argv, check=True, text=True, capture_output=True, **kwargs).stdout
+        try:
+            return subprocess.run(argv, check=True, text=True, capture_output=True, **kwargs).stdout
+        except subprocess.CalledProcessError as error:
+            print(f"Command failed (exit {error.returncode}): {shlex.join(argv)}", file=sys.stderr, flush=True)
+            if error.stderr:
+                print(error.stderr.rstrip("\n"), file=sys.stderr, flush=True)
+            raise
 
     def spawn(role, label, *args):
         stream = open(logs / (label + ".log"), "w")
@@ -235,8 +242,8 @@ def main(binary):
  chain prerouting { type filter hook prerouting priority mangle; policy accept;
   ct direction reply return
   tcp dport { 179, 9098, 9099 } return
-  iifname "s-r" meta nfproto ipv4 meta l4proto { tcp, udp } tproxy to :12345 meta mark set 2 accept
-  iifname "s-r" meta nfproto ipv6 meta l4proto { tcp, udp } tproxy to :12346 meta mark set 2 accept
+  iifname "s-r" meta nfproto ipv4 meta l4proto { tcp, udp } tproxy ip to :12345 meta mark set 2 accept
+  iifname "s-r" meta nfproto ipv6 meta l4proto { tcp, udp } tproxy ip6 to :12346 meta mark set 2 accept
  }
 }'''
         cmd("nft", "-f", "-", role="s", input=nft)
