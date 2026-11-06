@@ -321,23 +321,24 @@ func getPricing(model string, contextWindow int) ModelPricing {
 }
 
 func calculateCost(stats UsageStats, model string, contextWindow int) float64 {
+	return roundCost(calculateRawCost(stats, model, contextWindow))
+}
+
+// Keep fractional cents for metrics; JSON presentation uses calculateCost.
+func calculateRawCost(stats UsageStats, model string, contextWindow int) float64 {
 	pricing := getPricing(model, contextWindow)
 
-	cacheCreationCost := 0.0
-	if stats.CacheCreation5MinuteInputTokens > 0 || stats.CacheCreation1HourInputTokens > 0 {
-		cacheCreationCost = float64(stats.CacheCreation5MinuteInputTokens)*pricing.CacheWritePrice5Minute +
-			float64(stats.CacheCreation1HourInputTokens)*pricing.CacheWritePrice1Hour
-	} else {
-		// Backward compatibility for usage files generated before TTL split tracking.
-		cacheCreationCost = float64(stats.CacheCreationInputTokens) * pricing.CacheWritePrice5Minute
-	}
+	// Aggregated history may mix legacy writes with TTL details. Price the
+	// unclassified remainder as 5-minute writes, preserving legacy pricing.
+	splitCacheCreationTokens := stats.CacheCreation5MinuteInputTokens + stats.CacheCreation1HourInputTokens
+	legacyCacheCreationTokens := max(stats.CacheCreationInputTokens-splitCacheCreationTokens, 0)
+	cacheCreationCost := float64(stats.CacheCreation5MinuteInputTokens+legacyCacheCreationTokens)*pricing.CacheWritePrice5Minute +
+		float64(stats.CacheCreation1HourInputTokens)*pricing.CacheWritePrice1Hour
 
-	cost := (float64(stats.InputTokens)*pricing.InputPrice +
+	return (float64(stats.InputTokens)*pricing.InputPrice +
 		float64(stats.OutputTokens)*pricing.OutputPrice +
 		float64(stats.CacheReadInputTokens)*pricing.CacheReadPrice +
 		cacheCreationCost) / 1_000_000
-
-	return math.Round(cost*100) / 100
 }
 
 func roundCost(cost float64) float64 {

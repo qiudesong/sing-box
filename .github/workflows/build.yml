@@ -237,6 +237,9 @@ jobs:
           elif [[ "${{ matrix.variant }}" == "musl" ]]; then
             TAGS="${TAGS},with_musl"
           fi
+          if [[ "${{ matrix.os }}" == "linux" ]]; then
+            TAGS="${TAGS},with_bgp"
+          fi
           echo "BUILD_TAGS=${TAGS}" >> "${GITHUB_ENV}"
       - name: Set shared ldflags
         run: |
