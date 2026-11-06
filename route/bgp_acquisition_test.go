@@ -230,9 +230,10 @@ func TestBGPReferenceOwnership(t *testing.T) {
 						t.Fatal("unexpected handoff")
 					}
 				}
-				if completion == "missing outbound" {
+				switch completion {
+				case "missing outbound":
 					delete(r.outbound.(*acquisitionTestOutbounds).values, "proxy")
-				} else if completion == "unsupported network" {
+				case "unsupported network":
 					otherNetwork := N.NetworkTCP
 					if network == N.NetworkTCP {
 						otherNetwork = N.NetworkUDP

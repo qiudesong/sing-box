@@ -143,7 +143,7 @@ func TestMetricsThresholdSnapshotConcurrent(t *testing.T) {
 	service := &Service{adaptiveTimer: timer}
 	service.CollectMetrics(func(adapter.Metric) {
 		// Emitting a snapshot must not hold the timer lock.
-		timer.access.Lock()
+		require.True(t, timer.access.TryLock(), "emitting a snapshot must not hold the timer lock")
 		timer.access.Unlock()
 	}, nil)
 }

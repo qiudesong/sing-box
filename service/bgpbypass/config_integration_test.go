@@ -29,7 +29,8 @@ func example(t *testing.T) string {
 	t.Helper()
 	raw, e := os.ReadFile("../../docs/examples/bgp-bypass.json")
 	require.NoError(t, e)
-	return string(raw)
+	// Keep literal-based configuration mutations independent of checkout line endings.
+	return strings.ReplaceAll(string(raw), "\r\n", "\n")
 }
 
 func checkConfig(raw string) error {
@@ -119,7 +120,10 @@ func TestConfigurationRejectsUnsafeCombinations(t *testing.T) {
 		"excluded route":   strings.Replace(raw, `"persistent_routes": []`, `"persistent_routes": [{"ip_cidr":["192.168.66.0/24"],"outbound":"proxy-default"}]`, 1),
 	}
 	for name, content := range cases {
-		t.Run(name, func(t *testing.T) { require.Error(t, checkConfig(content)) })
+		t.Run(name, func(t *testing.T) {
+			require.NotEqual(t, raw, content, "configuration mutation must match the example")
+			require.Error(t, checkConfig(content))
+		})
 	}
 }
 

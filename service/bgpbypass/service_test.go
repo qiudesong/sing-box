@@ -304,9 +304,10 @@ func TestReconcilePreservesSettleWindows(t *testing.T) {
 					partialBackend: partialBackend{routes: map[netip.Prefix]bool{}},
 				}
 				s.backend = backend
-				if failure == "readback" {
+				switch failure {
+				case "readback":
 					backend.failListAt = 2
-				} else if failure == "partial add" {
+				case "partial add":
 					backend.fail = true
 				}
 				values := []association{{

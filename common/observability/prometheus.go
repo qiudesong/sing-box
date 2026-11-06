@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"slices"
 	"strconv"
+	"strings"
 	"sync"
 	"time"
 
@@ -145,11 +146,14 @@ func (c *moduleCollector) Collect(ch chan<- prometheus.Metric) {
 		}
 		slices.Sort(keys)
 		values := make([]string, len(keys))
-		key := snapshot.Name
+		var keyBuilder strings.Builder
+		keyBuilder.WriteString(snapshot.Name)
 		for i, name := range keys {
 			values[i] = snapshot.Labels[name]
-			key += "\x00" + name
+			keyBuilder.WriteByte(0)
+			keyBuilder.WriteString(name)
 		}
+		key := keyBuilder.String()
 		help := snapshot.Help
 		if help == "" {
 			help = "Module statistic " + snapshot.Name + "."
