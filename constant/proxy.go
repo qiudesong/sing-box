@@ -5,6 +5,7 @@ const (
 	TypeRedirect           = "redirect"
 	TypeTProxy             = "tproxy"
 	TypeDirect             = "direct"
+	TypeBGPBypass          = "bgp-bypass"
 	TypeBridge             = "bridge"
 	TypeBlock              = "block"
 	TypeDNS                = "dns"

@@ -197,7 +197,7 @@ func (s *Service) proxyWebSocketClientToUpstream(clientConn net.Conn, upstreamCo
 			return
 		}
 
-		if opCode == ws.OpText && s.usageTracker != nil {
+		if opCode == ws.OpText && s.usageTrackingEnabled() {
 			var request struct {
 				Type  string `json:"type"`
 				Model string `json:"model"`
@@ -231,7 +231,7 @@ func (s *Service) proxyWebSocketUpstreamToClient(upstreamReadWriter io.ReadWrite
 			return
 		}
 
-		if opCode == ws.OpText && s.usageTracker != nil {
+		if opCode == ws.OpText && s.usageTrackingEnabled() {
 			select {
 			case model := <-modelChannel:
 				requestModel = model
@@ -257,7 +257,7 @@ func (s *Service) proxyWebSocketUpstreamToClient(upstreamReadWriter io.ReadWrite
 						}
 						if responseModel != "" {
 							contextWindow := detectContextWindow(responseModel, serviceTier, inputTokens)
-							s.usageTracker.AddUsageWithCycleHint(
+							s.recordUsage(
 								responseModel,
 								contextWindow,
 								inputTokens,

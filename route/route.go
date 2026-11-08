@@ -7,6 +7,7 @@ import (
 	"net"
 	"net/netip"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/sagernet/sing-box/adapter"
@@ -69,7 +70,7 @@ func (r *Router) RouteConnectionEx(ctx context.Context, conn net.Conn, metadata 
 	}
 }
 
-func (r *Router) routeConnection(ctx context.Context, conn net.Conn, metadata adapter.InboundContext, onClose N.CloseHandlerFunc) error {
+func (r *Router) routeConnection(ctx context.Context, conn net.Conn, metadata adapter.InboundContext, onClose N.CloseHandlerFunc) (routeErr error) {
 	//nolint:staticcheck
 	if metadata.InboundDetour != "" {
 		if metadata.LastInbound == metadata.InboundDetour {
@@ -107,9 +108,22 @@ func (r *Router) routeConnection(ctx context.Context, conn net.Conn, metadata ad
 	if deadline.NeedAdditionalReadDeadline(conn) {
 		conn = deadline.NewConn(conn)
 	}
-	selectedRule, _, buffers, _, err := r.matchRule(ctx, &metadata, conn, nil)
+	selectedRule, _, buffers, _, releaseConnection, err := r.matchRule(ctx, &metadata, conn, nil)
 	if err != nil {
 		return err
+	}
+	if releaseConnection != nil {
+		releaseConnection = sync.OnceFunc(releaseConnection)
+		defer func() {
+			if routeErr != nil {
+				releaseConnection()
+			}
+		}()
+		conn = &ruleConn{
+			Conn:    conn,
+			release: releaseConnection,
+		}
+		onClose = N.AppendClose(onClose, func(error) { releaseConnection() })
 	}
 	var selectedOutbound adapter.Outbound
 	if selectedRule != nil {
@@ -178,6 +192,9 @@ func (r *Router) routeConnection(ctx context.Context, conn net.Conn, metadata ad
 func resolveOutbound(outbound adapter.Outbound, network string) ([]adapter.Outbound, error) {
 	chain := []adapter.Outbound{outbound}
 	for {
+		if len(chain) > 64 {
+			return nil, E.New("outbound chain cycle or excessive depth")
+		}
 		group, isGroup := outbound.(adapter.OutboundGroup)
 		if !isGroup {
 			break
@@ -245,7 +262,7 @@ func (r *Router) RoutePacketConnectionEx(ctx context.Context, conn N.PacketConn,
 	}
 }
 
-func (r *Router) routePacketConnection(ctx context.Context, conn N.PacketConn, metadata adapter.InboundContext, onClose N.CloseHandlerFunc) error {
+func (r *Router) routePacketConnection(ctx context.Context, conn N.PacketConn, metadata adapter.InboundContext, onClose N.CloseHandlerFunc) (routeErr error) {
 	//nolint:staticcheck
 	if metadata.InboundDetour != "" {
 		if metadata.LastInbound == metadata.InboundDetour {
@@ -275,9 +292,22 @@ func (r *Router) routePacketConnection(ctx context.Context, conn N.PacketConn, m
 	if metadata.InboundType == C.TypeTun && metadata.Protocol == C.ProtocolDNS {
 		return r.hijackDNSPacket(ctx, conn, nil, metadata, onClose)
 	}
-	selectedRule, _, _, packetBuffers, err := r.matchRule(ctx, &metadata, nil, conn)
+	selectedRule, _, _, packetBuffers, releaseConnection, err := r.matchRule(ctx, &metadata, nil, conn)
 	if err != nil {
 		return err
+	}
+	if releaseConnection != nil {
+		releaseConnection = sync.OnceFunc(releaseConnection)
+		defer func() {
+			if routeErr != nil {
+				releaseConnection()
+			}
+		}()
+		conn = &rulePacketConn{
+			PacketConn: conn,
+			release:    releaseConnection,
+		}
+		onClose = N.AppendClose(onClose, func(error) { releaseConnection() })
 	}
 	var selectedOutbound adapter.Outbound
 	var selectReturn bool
@@ -413,6 +443,10 @@ func (r *Router) PreMatch(metadata adapter.InboundContext, firstPacket []byte) a
 		case *R.RuleActionRouteOptions:
 			applyRouteOptionsOverride(&metadata, action)
 		case *R.RuleActionRoute:
+			if rule, ok := currentRule.(adapter.BGPBypassRule); ok && rule.BGPBypassService() != "" {
+				// Final selection must acquire a reference in the connection path.
+				return continueResult
+			}
 			applyRouteOptionsOverride(&metadata, &action.RuleActionRouteOptions)
 			return r.preMatchFlow(ctx, &metadata, packetDestination, currentRule, action.Outbound)
 		case *R.RuleActionBypass:
@@ -622,18 +656,54 @@ func (r *Router) matchRule(
 	inputConn net.Conn, inputPacketConn N.PacketConn,
 ) (
 	selectedRule adapter.Rule, selectedRuleIndex int,
-	buffers []*buf.Buffer, packetBuffers []*N.PacketBuffer, fatalErr error,
+	buffers []*buf.Buffer, packetBuffers []*N.PacketBuffer,
+	releaseConnection func(), fatalErr error,
 ) {
 	fatalErr = r.prepareMatchMetadata(ctx, metadata)
 	if fatalErr != nil {
 		return
 	}
 
+	var initialMetadata adapter.InboundContext
+	var sniffResults map[int]ruleSniffResult
+	if r.hasBGPBypass {
+		initialMetadata = *metadata
+	}
+	var bgpRetries int
 match:
-	for currentRuleIndex, currentRule := range r.rules {
+	for currentRuleIndex := 0; currentRuleIndex < len(r.rules); currentRuleIndex++ {
+		currentRule := r.rules[currentRuleIndex]
 		metadata.ResetRuleCache()
 		if !currentRule.Match(metadata) {
 			continue
+		}
+		if rule, ok := currentRule.(adapter.BGPBypassRule); ok && rule.BGPBypassService() != "" {
+			var acquired bool
+			releaseConnection, acquired = rule.AcquireBGPBypass(metadata)
+			if !acquired {
+				if releaseConnection != nil {
+					releaseConnection()
+					releaseConnection = nil
+				}
+				if fatalErr = ctx.Err(); fatalErr != nil {
+					buf.ReleaseMulti(buffers)
+					N.ReleaseMultiPacketBuffer(packetBuffers)
+					return
+				}
+				bgpRetries++
+				if bgpRetries >= maxBGPBypassRetries {
+					buf.ReleaseMulti(buffers)
+					N.ReleaseMultiPacketBuffer(packetBuffers)
+					fatalErr = E.New("bgp_bypass route changed repeatedly during selection")
+					return
+				}
+				// Reconsider earlier bindings if the winning outbound changed.
+				// Replay actions from their original input, retaining buffered data
+				// and applying sniff results only at their original rule position.
+				*metadata = initialMetadata
+				currentRuleIndex = -1
+				continue match
+			}
 		}
 		ruleDescription := currentRule.String()
 		if ruleDescription != "" {
@@ -696,7 +766,11 @@ match:
 		}
 		switch action := currentRule.Action().(type) {
 		case *R.RuleActionSniff:
-			newBuffer, newPacketBuffers, newErr := r.actionSniff(ctx, metadata, action, inputConn, inputPacketConn, buffers, packetBuffers)
+			if result, loaded := sniffResults[currentRuleIndex]; loaded {
+				result.restore(metadata, action)
+				break
+			}
+			newBuffer, newPacketBuffers, newErr, sniffed := r.actionSniff(ctx, metadata, action, inputConn, inputPacketConn, buffers, packetBuffers)
 			if newBuffer != nil {
 				buffers = append(buffers, newBuffer)
 			} else if len(newPacketBuffers) > 0 {
@@ -705,6 +779,12 @@ match:
 			if newErr != nil {
 				fatalErr = newErr
 				return
+			}
+			if r.hasBGPBypass && sniffed {
+				if sniffResults == nil {
+					sniffResults = make(map[int]ruleSniffResult)
+				}
+				sniffResults[currentRuleIndex] = snapshotRuleSniff(metadata)
 			}
 		case *R.RuleActionResolve:
 			fatalErr = r.actionResolve(ctx, metadata, action)
@@ -736,7 +816,7 @@ match:
 func (r *Router) actionSniff(
 	ctx context.Context, metadata *adapter.InboundContext, action *R.RuleActionSniff,
 	inputConn net.Conn, inputPacketConn N.PacketConn, inputBuffers []*buf.Buffer, inputPacketBuffers []*N.PacketBuffer,
-) (buffer *buf.Buffer, packetBuffers []*N.PacketBuffer, fatalErr error) {
+) (buffer *buf.Buffer, packetBuffers []*N.PacketBuffer, fatalErr error, sniffed bool) {
 	if sniff.Skip(metadata) {
 		r.logger.DebugContext(ctx, "sniff skipped due to port considered as server-first")
 		return
@@ -764,6 +844,7 @@ func (r *Router) actionSniff(
 				sniff.RDP,
 			}
 		}
+		sniffed = true
 		sniffBuffer := buf.NewPacket()
 		err := sniff.PeekStream(
 			ctx,
@@ -813,6 +894,7 @@ func (r *Router) actionSniff(
 		} else {
 			packetSniffers = defaultPacketSniffers
 		}
+		sniffed = true
 		var err error
 		for _, packetBuffer := range inputPacketBuffers {
 			if quicMoreData() {

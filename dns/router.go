@@ -7,6 +7,7 @@ import (
 	"net/netip"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/sagernet/sing-box/adapter"
@@ -30,12 +31,19 @@ import (
 	mDNS "github.com/miekg/dns"
 )
 
-var (
-	_ adapter.DNSRouter                 = (*Router)(nil)
-	_ adapter.DNSRuleSetUpdateValidator = (*Router)(nil)
-)
+var _ RouterInstance = (*Router)(nil)
+
+type RouterInstance interface {
+	adapter.DNSRouter
+	adapter.DNSRuleSetUpdateValidator
+	adapter.DNSResponseObservable
+	Initialize(rules []option.DNSRule) error
+}
 
 type Router struct {
+	observerAccess        sync.Mutex
+	observers             atomic.Pointer[responseObservers]
+	disableExpire         bool
 	ctx                   context.Context
 	logger                logger.ContextLogger
 	transport             adapter.DNSTransportManager
@@ -53,8 +61,9 @@ type Router struct {
 	closing               bool
 }
 
-func NewRouter(ctx context.Context, logFactory log.Factory, options option.DNSOptions) (*Router, error) {
+func NewRouter(ctx context.Context, logFactory log.Factory, options option.DNSOptions) (RouterInstance, error) {
 	router := &Router{
+		disableExpire:         options.DisableExpire,
 		ctx:                   ctx,
 		logger:                logFactory.NewLogger("dns"),
 		transport:             service.FromContext[adapter.DNSTransportManager](ctx),
@@ -116,7 +125,14 @@ func NewRouter(ctx context.Context, logFactory log.Factory, options option.DNSOp
 	if options.ReverseMapping {
 		router.dnsReverseMapping = common.Must1(freelru.New[netip.Addr, string](1024, maphash.NewHasher[netip.Addr]().Hash32, true))
 	}
-	return router, nil
+	metrics := adapter.MetricsObserverFromContext(ctx)
+	if metrics == nil {
+		return router, nil
+	}
+	return &metricsRouter{
+		Router:  router,
+		metrics: metrics,
+	}, nil
 }
 
 func (r *Router) Initialize(rules []option.DNSRule) error {
@@ -1190,6 +1206,7 @@ func (r *Router) exchangeLegacy(ctx context.Context, exchangeCtx *dnsExchangeCon
 func (r *Router) Exchange(ctx context.Context, message *mDNS.Msg, options adapter.DNSQueryOptions) (*mDNS.Msg, error) {
 	exchangeCtx, earlyResponse, err := r.prepareExchange(ctx, message)
 	if exchangeCtx == nil {
+		r.observeResponse(ctx, message, earlyResponse, err)
 		return earlyResponse, err
 	}
 	ctx = exchangeCtx.ctx
@@ -1210,12 +1227,14 @@ func (r *Router) Exchange(ctx context.Context, message *mDNS.Msg, options adapte
 		return nil, err
 	}
 	r.recordReverseMapping(message, response, transport)
+	r.observeResponse(ctx, message, response, nil)
 	return response, nil
 }
 
 func (r *Router) ExchangeAsync(ctx context.Context, message *mDNS.Msg, options adapter.DNSQueryOptions, callback func(response *mDNS.Msg, err error)) {
 	exchangeCtx, earlyResponse, err := r.prepareExchange(ctx, message)
 	if exchangeCtx == nil {
+		r.observeResponse(ctx, message, earlyResponse, err)
 		callback(earlyResponse, err)
 		return
 	}
@@ -1223,26 +1242,27 @@ func (r *Router) ExchangeAsync(ctx context.Context, message *mDNS.Msg, options a
 	if options.Transport != nil {
 		transport := options.Transport
 		r.client.ExchangeAsync(ctx, transport, message, r.finalizeExchangeOptions(options), nil, func(response *mDNS.Msg, exchangeErr error) {
-			r.finishExchangeAsync(message, transport, response, exchangeErr, callback)
+			r.finishExchangeAsync(ctx, message, transport, response, exchangeErr, callback)
 		})
 	} else if !exchangeCtx.legacyDNSMode {
 		r.exchangeWithRulesAsync(ctx, exchangeCtx.rules, message, options, true, func(result exchangeWithRulesResult) {
-			r.finishExchangeAsync(message, result.transport, result.response, result.err, callback)
+			r.finishExchangeAsync(ctx, message, result.transport, result.response, result.err, callback)
 		})
 	} else {
 		go func() {
 			response, transport, exchangeErr := r.exchangeLegacy(ctx, exchangeCtx, message, options)
-			r.finishExchangeAsync(message, transport, response, exchangeErr, callback)
+			r.finishExchangeAsync(ctx, message, transport, response, exchangeErr, callback)
 		}()
 	}
 }
 
-func (r *Router) finishExchangeAsync(message *mDNS.Msg, transport adapter.DNSTransport, response *mDNS.Msg, err error, callback func(response *mDNS.Msg, err error)) {
+func (r *Router) finishExchangeAsync(ctx context.Context, message *mDNS.Msg, transport adapter.DNSTransport, response *mDNS.Msg, err error, callback func(response *mDNS.Msg, err error)) {
 	if err != nil {
 		callback(nil, err)
 		return
 	}
 	r.recordReverseMapping(message, response, transport)
+	r.observeResponse(ctx, message, response, nil)
 	callback(response, nil)
 }
 

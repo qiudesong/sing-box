@@ -35,6 +35,7 @@ var (
 var _ adapter.DNSClient = (*Client)(nil)
 
 type Client struct {
+	metrics           adapter.DNSMetricsObserver
 	ctx               context.Context
 	timeout           time.Duration
 	disableCache      bool
@@ -70,6 +71,7 @@ func NewClient(options ClientOptions) *Client {
 	cacheCapacity := max(options.CacheCapacity, 1024)
 	client := &Client{
 		ctx:               options.Context,
+		metrics:           adapter.MetricsObserverFromContext(options.Context),
 		timeout:           options.Timeout,
 		disableCache:      options.DisableCache,
 		disableExpire:     options.DisableExpire,
@@ -307,6 +309,7 @@ func (c *Client) beginExchange(ctx context.Context, transport adapter.DNSTranspo
 		for {
 			response, ttl, isStale := c.loadResponse(cacheKey)
 			if response != nil && (!isStale || !options.DisableOptimisticCache) {
+				c.countCache(transport.Tag(), true, isStale)
 				operation.release()
 				if isStale {
 					c.backgroundRefreshDNS(transport, cacheKey, message.Copy(), options, responseChecker)
@@ -324,6 +327,7 @@ func (c *Client) beginExchange(ctx context.Context, transport adapter.DNSTranspo
 				return nil, response, exchangeDone, nil
 			}
 			if !loaded {
+				c.countCache(transport.Tag(), false, false)
 				break
 			}
 			if !allowWait {
@@ -572,6 +576,9 @@ func (c *Client) questionCache(ctx context.Context, transport adapter.DNSTranspo
 	question := message.Question[0]
 	cacheKey := c.newCacheKey(transport, question, message, options)
 	response, _, isStale := c.loadResponse(cacheKey)
+	if response != nil && (!isStale || !options.DisableOptimisticCache) {
+		c.countCache(transport.Tag(), true, isStale)
+	}
 	if response == nil {
 		return nil, ErrNotCached
 	}
@@ -691,6 +698,9 @@ func (c *Client) backgroundRefreshDNS(transport adapter.DNSTransport, key dnsCac
 			timeout = c.timeout
 		}
 		ctx := adapter.ContextWithDNSTransportTag(c.ctx, transport.Tag())
+		if c.metrics != nil {
+			ctx = context.WithValue(ctx, adapter.DNSMetricsContext{}, true)
+		}
 		ctx, cancel := context.WithTimeout(ctx, timeout)
 		defer cancel()
 		response, err := c.exchangeToTransport(ctx, transport, message)
@@ -755,7 +765,7 @@ func stripDNSPadding(response *dns.Msg) {
 	}
 }
 
-func (c *Client) exchangeToTransport(ctx context.Context, transport adapter.DNSTransport, message *dns.Msg) (*dns.Msg, error) {
+func (c *Client) exchangeToTransportRaw(ctx context.Context, transport adapter.DNSTransport, message *dns.Msg) (*dns.Msg, error) {
 	response, err := transport.Exchange(ctx, message)
 	if err == nil {
 		stripDNSPadding(response)
@@ -768,7 +778,7 @@ func (c *Client) exchangeToTransport(ctx context.Context, transport adapter.DNST
 	return nil, err
 }
 
-func (c *Client) exchangeToTransportAsync(ctx context.Context, transport adapter.DNSTransport, message *dns.Msg, callback func(response *dns.Msg, err error)) {
+func (c *Client) exchangeToTransportAsyncRaw(ctx context.Context, transport adapter.DNSTransport, message *dns.Msg, callback func(response *dns.Msg, err error)) {
 	transport.ExchangeAsync(ctx, message, func(response *dns.Msg, err error) {
 		if err == nil {
 			stripDNSPadding(response)

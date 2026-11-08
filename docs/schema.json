@@ -119,6 +119,9 @@
     },
     "experimental": {
       "$ref": "#/$defs/ExperimentalOptions"
+    },
+    "observability": {
+      "$ref": "#/$defs/ObservabilityOptions"
     }
   },
   "additionalProperties": false,
@@ -288,6 +291,123 @@
         },
         "password": {
           "type": "string"
+        }
+      },
+      "additionalProperties": false
+    },
+    "BGPBypassBGPOptions": {
+      "type": "object",
+      "properties": {
+        "local_asn": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 4294967295
+        },
+        "router_id": {
+          "type": "string"
+        },
+        "listen_port": {
+          "type": "integer"
+        },
+        "next_hop_ipv4": {
+          "type": "string"
+        },
+        "next_hop_ipv6": {
+          "type": "string"
+        },
+        "keepalive": {
+          "$ref": "#/$defs/Duration"
+        },
+        "hold_time": {
+          "$ref": "#/$defs/Duration"
+        },
+        "peers": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/BGPBypassPeer"
+          }
+        }
+      },
+      "additionalProperties": false
+    },
+    "BGPBypassLimits": {
+      "type": "object",
+      "properties": {
+        "max_dynamic_routes": {
+          "type": "integer"
+        },
+        "max_dns_associations": {
+          "type": "integer"
+        },
+        "max_pending_updates": {
+          "type": "integer"
+        }
+      },
+      "additionalProperties": false
+    },
+    "BGPBypassPeer": {
+      "type": "object",
+      "properties": {
+        "tag": {
+          "type": "string"
+        },
+        "address": {
+          "type": "string"
+        },
+        "local_address": {
+          "type": "string"
+        },
+        "asn": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 4294967295
+        },
+        "families": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "password": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false
+    },
+    "BGPBypassPersistentRoute": {
+      "type": "object",
+      "properties": {
+        "ip_cidr": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "rule_set": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "x-tag-reference": "rule_set"
+          }
+        },
+        "outbound": {
+          "type": "string",
+          "x-tag-reference": "outbound"
+        }
+      },
+      "additionalProperties": false
+    },
+    "BGPBypassTiming": {
+      "type": "object",
+      "properties": {
+        "commit_timeout": {
+          "$ref": "#/$defs/Duration"
+        },
+        "settle_delay": {
+          "$ref": "#/$defs/Duration"
+        },
+        "withdraw_delay": {
+          "$ref": "#/$defs/Duration"
         }
       },
       "additionalProperties": false
@@ -9302,6 +9422,10 @@
                 ""
               ]
             },
+            "bgp_bypass": {
+              "type": "string",
+              "x-tag-reference": "service"
+            },
             "inbound": {
               "anyOf": [
                 {
@@ -9889,6 +10013,43 @@
         },
         "token": {
           "type": "string"
+        }
+      },
+      "additionalProperties": false
+    },
+    "ObservabilityOptions": {
+      "type": "object",
+      "properties": {
+        "listen": {
+          "type": "string"
+        },
+        "listen_port": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 65535
+        },
+        "metrics": {
+          "type": "boolean"
+        },
+        "metrics_users": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "diagnostics": {
+          "type": "boolean"
+        },
+        "secret": {
+          "type": "string"
+        },
+        "health_listen": {
+          "type": "string"
+        },
+        "health_port": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 65535
         }
       },
       "additionalProperties": false
@@ -14307,6 +14468,10 @@
                     ""
                   ]
                 },
+                "bgp_bypass": {
+                  "type": "string",
+                  "x-tag-reference": "service"
+                },
                 "inbound": {
                   "anyOf": [
                     {
@@ -15431,6 +15596,54 @@
             },
             "tls": {
               "$ref": "#/$defs/InboundTLSOptions"
+            }
+          },
+          "required": [
+            "type"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "type": {
+              "const": "bgp-bypass"
+            },
+            "tag": {
+              "type": "string"
+            },
+            "advertise": {
+              "type": "boolean"
+            },
+            "dns_inbounds": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            },
+            "state_path": {
+              "type": "string"
+            },
+            "bgp": {
+              "$ref": "#/$defs/BGPBypassBGPOptions"
+            },
+            "persistent_routes": {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/BGPBypassPersistentRoute"
+              }
+            },
+            "exclude_prefixes": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            },
+            "limits": {
+              "$ref": "#/$defs/BGPBypassLimits"
+            },
+            "timing": {
+              "$ref": "#/$defs/BGPBypassTiming"
             }
           },
           "required": [

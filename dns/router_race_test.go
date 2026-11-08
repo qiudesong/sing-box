@@ -112,22 +112,27 @@ func (m *fakeDNSTransportManager) Create(ctx context.Context, logger log.Context
 }
 
 func raceTestRouter(t *testing.T, transports ...*fakeDNSTransport) *Router {
+	ctx := context.Background()
+	return raceTestRouterWithClient(ctx, NewClient(ClientOptions{
+		Context:      ctx,
+		DisableCache: true,
+		Logger:       log.NewNOPFactory().Logger(),
+	}), transports...)
+}
+
+func raceTestRouterWithClient(ctx context.Context, client *Client, transports ...*fakeDNSTransport) *Router {
 	transportMap := make(map[string]adapter.DNSTransport)
 	for _, transport := range transports {
 		transportMap[transport.tag] = transport
 	}
 	return &Router{
-		ctx:    context.Background(),
+		ctx:    ctx,
 		logger: log.NewNOPFactory().Logger(),
 		transport: &fakeDNSTransportManager{
 			transports:       transportMap,
 			defaultTransport: transportMap["final"],
 		},
-		client: NewClient(ClientOptions{
-			Context:      context.Background(),
-			DisableCache: true,
-			Logger:       log.NewNOPFactory().Logger(),
-		}),
+		client: client,
 	}
 }
 

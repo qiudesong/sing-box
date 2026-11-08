@@ -34,6 +34,7 @@ import (
 var _ adapter.ConnectionManager = (*ConnectionManager)(nil)
 
 type ConnectionManager struct {
+	dialMetrics    dialMetrics
 	logger         logger.ContextLogger
 	urlTestHistory *urltest.HistoryStorage
 	access         sync.Mutex
@@ -43,6 +44,7 @@ type ConnectionManager struct {
 func NewConnectionManager(ctx context.Context, logger logger.ContextLogger) *ConnectionManager {
 	return &ConnectionManager{
 		logger:         logger,
+		dialMetrics:    newDialMetricsOrNop(adapter.MetricsObserverFromContext(ctx)),
 		urlTestHistory: service.PtrFromContext[urltest.HistoryStorage](ctx),
 	}
 }
@@ -100,6 +102,7 @@ func (m *ConnectionManager) TrackPacketConn(conn net.PacketConn) net.PacketConn 
 }
 
 func (m *ConnectionManager) NewConnection(ctx context.Context, this N.Dialer, conn net.Conn, metadata adapter.InboundContext, onClose N.CloseHandlerFunc) {
+	dialStart := m.dialMetrics.Start()
 	ctx = adapter.WithContext(ctx, &metadata)
 	var (
 		remoteConn net.Conn
@@ -110,6 +113,7 @@ func (m *ConnectionManager) NewConnection(ctx context.Context, this N.Dialer, co
 	} else {
 		remoteConn, err = this.DialContext(ctx, N.NetworkTCP, metadata.Destination)
 	}
+	m.dialMetrics.Finish(dialStart, N.NetworkTCP, metadata.RouteOutbound, err)
 	if err != nil {
 		var remoteString string
 		if len(metadata.DestinationAddresses) > 0 {
@@ -162,6 +166,7 @@ func (m *ConnectionManager) NewConnection(ctx context.Context, this N.Dialer, co
 }
 
 func (m *ConnectionManager) NewPacketConnection(ctx context.Context, this N.Dialer, conn N.PacketConn, metadata adapter.InboundContext, onClose N.CloseHandlerFunc) {
+	dialStart := m.dialMetrics.Start()
 	ctx = adapter.WithContext(ctx, &metadata)
 	var (
 		remotePacketConn   net.PacketConn
@@ -186,6 +191,7 @@ func (m *ConnectionManager) NewPacketConnection(ctx context.Context, this N.Dial
 		} else {
 			remoteConn, err = this.DialContext(ctx, N.NetworkUDP, metadata.Destination)
 		}
+		m.dialMetrics.Finish(dialStart, N.NetworkUDP, metadata.RouteOutbound, err)
 		if err != nil {
 			var remoteString string
 			if len(metadata.DestinationAddresses) > 0 {
@@ -216,6 +222,7 @@ func (m *ConnectionManager) NewPacketConnection(ctx context.Context, this N.Dial
 		} else {
 			remotePacketConn, err = this.ListenPacket(ctx, metadata.Destination)
 		}
+		m.dialMetrics.Finish(dialStart, N.NetworkUDP, metadata.RouteOutbound, err)
 		if err != nil {
 			var dialerString string
 			if outbound, isOutbound := this.(adapter.Outbound); isOutbound {

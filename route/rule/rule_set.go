@@ -87,6 +87,8 @@ func isNonIPCIDRHeadlessRule(rule option.DefaultHeadlessRule) bool {
 
 func buildRuleSetMetadata(headlessRules []option.HeadlessRule) adapter.RuleSetMetadata {
 	return adapter.RuleSetMetadata{
+		ContainsNonDNSBypassRule: !bypassRulesSupported(headlessRules, false),
+		IPCIDRUnion:              bypassRulesSupported(headlessRules, true),
 		ContainsProcessRule:      HasHeadlessRule(headlessRules, isProcessHeadlessRule),
 		ContainsWIFIRule:         HasHeadlessRule(headlessRules, isWIFIHeadlessRule),
 		ContainsIPCIDRRule:       HasHeadlessRule(headlessRules, isIPCIDRHeadlessRule),
@@ -96,9 +98,58 @@ func buildRuleSetMetadata(headlessRules []option.HeadlessRule) adapter.RuleSetMe
 }
 
 func validateRuleSetMetadataUpdate(ctx context.Context, tag string, metadata adapter.RuleSetMetadata) error {
+	if manager := service.FromContext[adapter.ServiceManager](ctx); manager != nil {
+		for _, component := range manager.Services() {
+			if validator, ok := component.(adapter.RuleSetUpdateValidator); ok {
+				if err := validator.ValidateRuleSetUpdate(tag, metadata); err != nil {
+					return err
+				}
+			}
+		}
+	}
 	validator := service.FromContext[adapter.DNSRuleSetUpdateValidator](ctx)
 	if validator == nil {
 		return nil
 	}
 	return validator.ValidateRuleSetMetadataUpdate(tag, metadata)
+}
+
+// Validate semantics before ExtractIPSet: that API intentionally flattens rules.
+func bypassRulesSupported(rules []option.HeadlessRule, prefixesOnly bool) bool {
+	// An empty list is a valid empty union. IPCIDRUnion remains true for a
+	// loaded empty set, distinguishing it from unloaded zero-value metadata.
+	for _, raw := range rules {
+		switch raw.Type {
+		case C.RuleTypeDefault, "":
+			r := raw.DefaultOptions
+			allowed := option.DefaultHeadlessRule{IPCIDR: r.IPCIDR, IPSet: r.IPSet}
+			if prefixesOnly {
+				if len(r.IPCIDR) == 0 && r.IPSet == nil {
+					return false
+				}
+			} else {
+				allowed.Domain = r.Domain
+				allowed.DomainSuffix = r.DomainSuffix
+				allowed.DomainKeyword = r.DomainKeyword
+				allowed.DomainRegex = r.DomainRegex
+				allowed.DomainMatcher = r.DomainMatcher
+				allowed.AdGuardDomain = r.AdGuardDomain
+				allowed.AdGuardDomainMatcher = r.AdGuardDomainMatcher
+				allowed.Invert = r.Invert
+			}
+			if !reflect.DeepEqual(r, allowed) {
+				return false
+			}
+		case C.RuleTypeLogical:
+			if prefixesOnly && (raw.LogicalOptions.Invert || raw.LogicalOptions.Mode != C.LogicalTypeOr) {
+				return false
+			}
+			if !bypassRulesSupported(raw.LogicalOptions.Rules, prefixesOnly) {
+				return false
+			}
+		default:
+			return false
+		}
+	}
+	return true
 }

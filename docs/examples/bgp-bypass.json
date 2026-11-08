@@ -1,0 +1,197 @@
+{
+  "observability": {
+    "listen": "127.0.0.1",
+    "listen_port": 9098,
+    "metrics": true,
+    "diagnostics": true,
+    "health_listen": "192.168.66.2",
+    "health_port": 9099
+  },
+  "log": {
+    "level": "info"
+  },
+  "dns": {
+    "servers": [
+      {
+        "type": "udp",
+        "tag": "dns-direct",
+        "server": "223.5.5.5",
+        "detour": "direct"
+      },
+      {
+        "type": "https",
+        "tag": "dns-proxy",
+        "server": "1.1.1.1",
+        "detour": "proxy-default"
+      }
+    ],
+    "rules": [
+      {
+        "domain_suffix": [
+          "google.com",
+          "openai.com",
+          "github.com",
+          "githubusercontent.com"
+        ],
+        "server": "dns-proxy"
+      }
+    ],
+    "final": "dns-direct"
+  },
+  "inbounds": [
+    {
+      "type": "tproxy",
+      "tag": "lan-tproxy",
+      "listen": "0.0.0.0",
+      "listen_port": 12345
+    },
+    {
+      "type": "tproxy",
+      "tag": "lan-tproxy6",
+      "listen": "::",
+      "listen_port": 12346
+    }
+  ],
+  "outbounds": [
+    {
+      "type": "direct",
+      "tag": "direct"
+    },
+    {
+      "type": "socks",
+      "tag": "proxy-default",
+      "server": "192.0.2.10",
+      "server_port": 1080
+    },
+    {
+      "type": "socks",
+      "tag": "proxy-jp",
+      "server": "192.0.2.20",
+      "server_port": 1080
+    }
+  ],
+  "route": {
+    "default_mark": 1,
+    "rules": [
+      {
+        "inbound": [
+          "lan-tproxy",
+          "lan-tproxy6"
+        ],
+        "port": 53,
+        "action": "hijack-dns"
+      },
+      {
+        "inbound": [
+          "lan-tproxy",
+          "lan-tproxy6"
+        ],
+        "bgp_bypass": "bypass-control",
+        "action": "route",
+        "outbound": "proxy-jp"
+      },
+      {
+        "inbound": [
+          "lan-tproxy",
+          "lan-tproxy6"
+        ],
+        "bgp_bypass": "bypass-control",
+        "action": "route",
+        "outbound": "proxy-default"
+      },
+      {
+        "domain_suffix": [
+          "example.cn"
+        ],
+        "outbound": "direct",
+        "action": "route"
+      },
+      {
+        "domain_suffix": [
+          "google.com",
+          "openai.com"
+        ],
+        "outbound": "proxy-jp",
+        "action": "route"
+      },
+      {
+        "rule_set": [
+          "proxy-domains"
+        ],
+        "outbound": "proxy-default",
+        "action": "route"
+      }
+    ],
+    "final": "direct",
+    "rule_set": [
+      {
+        "type": "inline",
+        "tag": "proxy-domains",
+        "rules": [
+          {
+            "domain_suffix": [
+              "github.com",
+              "githubusercontent.com"
+            ]
+          }
+        ]
+      }
+    ]
+  },
+  "services": [
+    {
+      "type": "bgp-bypass",
+      "tag": "bypass-control",
+      "advertise": false,
+      "dns_inbounds": [
+        "lan-tproxy",
+        "lan-tproxy6"
+      ],
+      "state_path": "/var/lib/sing-box/bgp-bypass-state.json",
+      "bgp": {
+        "local_asn": 65002,
+        "router_id": "192.168.66.2",
+        "listen_port": -1,
+        "next_hop_ipv4": "192.168.66.2",
+        "next_hop_ipv6": "fd66::2",
+        "keepalive": "3s",
+        "hold_time": "9s",
+        "peers": [
+          {
+            "tag": "routeros-v4",
+            "address": "192.168.66.1",
+            "local_address": "192.168.66.2",
+            "asn": 65001,
+            "families": [
+              "ipv4-unicast"
+            ]
+          },
+          {
+            "tag": "routeros-v6",
+            "address": "fd66::1",
+            "local_address": "fd66::2",
+            "asn": 65001,
+            "families": [
+              "ipv6-unicast"
+            ]
+          }
+        ]
+      },
+      "persistent_routes": [],
+      "exclude_prefixes": [
+        "192.168.66.0/24",
+        "fd66::/64"
+      ],
+      "limits": {
+        "max_dynamic_routes": 10000,
+        "max_dns_associations": 100000,
+        "max_pending_updates": 4096
+      },
+      "timing": {
+        "commit_timeout": "250ms",
+        "settle_delay": "100ms",
+        "withdraw_delay": "60s"
+      }
+    }
+  ]
+}
